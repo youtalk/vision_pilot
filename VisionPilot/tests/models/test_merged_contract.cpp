@@ -1,16 +1,21 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <models/auto_drive.hpp>
 #include <models/auto_steer.hpp>
 #include <models/merged_contract.hpp>
+#include <string>
 
 using visionpilot::models::MergedContract;
+using visionpilot::models::resolve_contract_path;
 
 namespace {
 
 // The v7 contract emitted by openadkit's rewrite pipeline, verbatim from
-// x5h-work/npu/merged/v7_frozen.onnx.contract.json.
+// v7_frozen.onnx.contract.json.
 const char* kV7Contract = R"({
  "attn_mode": "frozen",
  "passthrough": ["steer_height"],
@@ -54,6 +59,34 @@ const char* kV6Contract = R"({
   ]
  }
 })";
+
+// A unique on-disk directory for one test, removed (recursively) when the
+// test's scope ends, including on an ASSERT-triggered early return.
+class ScopedTempDir
+{
+public:
+    ScopedTempDir()
+        : path_(std::filesystem::temp_directory_path() /
+                ("visionpilot_merged_contract_test_" +
+                 std::to_string(
+                     std::chrono::steady_clock::now().time_since_epoch().count())))
+    {
+        std::filesystem::create_directories(path_);
+    }
+
+    ~ScopedTempDir() { std::filesystem::remove_all(path_); }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+void write_file(const std::filesystem::path& path, const std::string& content)
+{
+    std::ofstream out(path);
+    out << content;
+}
 
 }  // namespace
 
@@ -150,4 +183,104 @@ TEST(MergedContract, DetectsRewriteSignatureOutputs)
     EXPECT_TRUE(has_rewrite_signature_output({"speed_l15_box", "speed_l15_cls"}));
     EXPECT_FALSE(has_rewrite_signature_output(
         {"steer_xp", "speed_output", "drive_distance"}));
+}
+
+TEST(ResolveContractPath, PrefersSidecarWhenOnlySidecarExists)
+{
+    ScopedTempDir dir;
+    const auto model_path = (dir.path() / "model.onnx").string();
+    const auto sidecar    = model_path + ".contract.json";
+    write_file(sidecar, "{}");
+
+    EXPECT_EQ(resolve_contract_path(model_path, ""), sidecar);
+}
+
+TEST(ResolveContractPath, FallsBackToArtifactsDirWhenSidecarIsAbsent)
+{
+    ScopedTempDir dir;
+    const auto model_path    = (dir.path() / "model.onnx").string();
+    const auto artifacts_dir = dir.path().string();
+    const auto in_dir        = (dir.path() / "contract.json").string();
+    write_file(in_dir, "{}");
+
+    EXPECT_EQ(resolve_contract_path(model_path, artifacts_dir), in_dir);
+}
+
+TEST(ResolveContractPath, PrefersSidecarWhenBothExist)
+{
+    ScopedTempDir dir;
+    const auto model_path    = (dir.path() / "model.onnx").string();
+    const auto artifacts_dir = dir.path().string();
+    const auto sidecar       = model_path + ".contract.json";
+    write_file(sidecar, "{}");
+    write_file((dir.path() / "contract.json").string(), "{}");
+
+    EXPECT_EQ(resolve_contract_path(model_path, artifacts_dir), sidecar);
+}
+
+TEST(ResolveContractPath, ReturnsEmptyWhenNeitherExists)
+{
+    ScopedTempDir dir;
+    const auto model_path    = (dir.path() / "model.onnx").string();
+    const auto artifacts_dir = dir.path().string();
+
+    EXPECT_EQ(resolve_contract_path(model_path, artifacts_dir), "");
+}
+
+TEST(ResolveContractPath, UsesArtifactsDirWhenModelPathIsEmpty)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    const auto in_dir        = (dir.path() / "contract.json").string();
+    write_file(in_dir, "{}");
+
+    EXPECT_EQ(resolve_contract_path("", artifacts_dir), in_dir);
+}
+
+TEST(ResolveContractPath, ReturnsEmptyWhenBothArgumentsAreEmpty)
+{
+    EXPECT_EQ(resolve_contract_path("", ""), "");
+}
+
+TEST(MergedContractFromFile, ParsesSameAsFromJsonString)
+{
+    ScopedTempDir dir;
+    const auto path = (dir.path() / "v7.contract.json").string();
+    write_file(path, kV7Contract);
+
+    const auto from_file   = MergedContract::from_file(path);
+    const auto from_string = MergedContract::from_json_string(kV7Contract);
+
+    EXPECT_EQ(from_file.attn_mode, from_string.attn_mode);
+    EXPECT_EQ(from_file.passthrough, from_string.passthrough);
+
+    ASSERT_TRUE(from_file.head.has_value());
+    ASSERT_TRUE(from_string.head.has_value());
+    EXPECT_EQ(from_file.head->output, from_string.head->output);
+    EXPECT_EQ(from_file.head->alpha, from_string.head->alpha);
+
+    ASSERT_TRUE(from_file.steer_xp.has_value());
+    ASSERT_TRUE(from_string.steer_xp.has_value());
+    EXPECT_EQ(from_file.steer_xp->logits, from_string.steer_xp->logits);
+
+    ASSERT_TRUE(from_file.speed.has_value());
+    ASSERT_TRUE(from_string.speed.has_value());
+    EXPECT_EQ(from_file.speed->levels.size(), from_string.speed->levels.size());
+}
+
+TEST(MergedContractFromFile, ThrowsWhenPathDoesNotExist)
+{
+    ScopedTempDir dir;
+    const auto path = (dir.path() / "does_not_exist.contract.json").string();
+
+    EXPECT_THROW(MergedContract::from_file(path), std::runtime_error);
+}
+
+TEST(MergedContractFromFile, ThrowsOnMalformedJson)
+{
+    ScopedTempDir dir;
+    const auto path = (dir.path() / "malformed.contract.json").string();
+    write_file(path, "{ not json");
+
+    EXPECT_THROW(MergedContract::from_file(path), std::runtime_error);
 }
