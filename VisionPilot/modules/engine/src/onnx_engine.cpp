@@ -1,5 +1,6 @@
 #include "engine/onnx_engine.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
@@ -32,42 +33,65 @@ OnnxEngine::OnnxEngine(const Config& cfg)
 RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir)
 {
     namespace fs = std::filesystem;
-    const fs::path dir(artifacts_dir);
 
-    if (!fs::is_directory(dir)) {
+    if (artifacts_dir.empty()) {
+        throw std::runtime_error(
+            "[OnnxEngine] engine.artifacts_dir is not configured");
+    }
+
+    const fs::path dir(artifacts_dir);
+    if (!fs::exists(dir)) {
         throw std::runtime_error(
             "[OnnxEngine] artifacts directory does not exist: " + artifacts_dir);
+    }
+    if (!fs::is_directory(dir)) {
+        throw std::runtime_error(
+            "[OnnxEngine] artifacts directory exists but is not a directory: " +
+            artifacts_dir);
     }
 
     std::vector<std::string> missing;
     const fs::path nnx  = dir / "nnx";
     const fs::path fused = dir / "fused_subgraphs";
-    if (!fs::is_directory(nnx))   missing.push_back(nnx.string());
+    const fs::path manifest = nnx / "manifest.json";
+
+    if (!fs::is_directory(nnx)) {
+        // manifest.json necessarily cannot exist either; report only the
+        // missing directory rather than two entries for one root cause.
+        missing.push_back(nnx.string());
+    } else if (!fs::is_regular_file(manifest)) {
+        missing.push_back(manifest.string());
+    }
     if (!fs::is_directory(fused)) missing.push_back(fused.string());
 
-    // Prefer the qdq-inserted variant, matching the vendor's check_artifacts.
+    // Collect every candidate so the pick is deterministic regardless of
+    // directory_iterator's unspecified enumeration order. Multiple matches
+    // are not an error -- the rule is "at least one legalized_*.onnx" -- so
+    // we sort and take the lexicographically first rather than throwing.
+    std::vector<std::string> qdq_candidates;
+    std::vector<std::string> plain_candidates;
+    for (const auto& e : fs::directory_iterator(dir)) {
+        if (e.path().extension() != ".onnx") continue;
+        const std::string name = e.path().filename().string();
+        if (name.rfind("qdq_inserted_legalized_", 0) == 0) {
+            qdq_candidates.push_back(e.path().string());
+        } else if (name.rfind("legalized_", 0) == 0) {
+            plain_candidates.push_back(e.path().string());
+        }
+    }
+
     std::string legalized;
     bool qdq = false;
-    for (const auto& e : fs::directory_iterator(dir)) {
-        const std::string name = e.path().filename().string();
-        if (name.rfind("qdq_inserted_legalized_", 0) == 0 &&
-            e.path().extension() == ".onnx") {
-            legalized = e.path().string();
-            qdq = true;
-            break;
-        }
-    }
-    if (legalized.empty()) {
-        for (const auto& e : fs::directory_iterator(dir)) {
-            const std::string name = e.path().filename().string();
-            if (name.rfind("legalized_", 0) == 0 &&
-                e.path().extension() == ".onnx") {
-                legalized = e.path().string();
-                break;
-            }
-        }
-    }
-    if (legalized.empty()) {
+    if (!qdq_candidates.empty()) {
+        // Prefer the qdq-inserted variant, matching the vendor's artifact
+        // check.
+        std::sort(qdq_candidates.begin(), qdq_candidates.end());
+        legalized = qdq_candidates.front();
+        qdq = true;
+    } else if (!plain_candidates.empty()) {
+        std::sort(plain_candidates.begin(), plain_candidates.end());
+        legalized = plain_candidates.front();
+    } else {
         missing.push_back((dir / "legalized_*.onnx").string());
     }
 
@@ -81,7 +105,7 @@ RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir)
 
     RenesasArtifacts a;
     a.model        = legalized;
-    a.manifest     = (nnx / "manifest.json").string();
+    a.manifest     = manifest.string();
     a.base         = dir.parent_path().string();
     a.qdq_inserted = qdq;
     return a;
@@ -244,7 +268,9 @@ std::unique_ptr<Ort::Session> OnnxEngine::create_renesas_session(
         {"run_rtt",       "false"},
     };
     // The generic AppendExecutionProvider overload takes the option map
-    // directly; no key/value array marshalling is needed.
+    // directly; no key/value array marshalling is needed. CPU needs no
+    // explicit append here: it is ORT's implicit last-resort EP, so any
+    // node the Renesas EP does not claim already falls back to it.
     opts.AppendExecutionProvider("RenesasExecutionProvider", po);
 
     printf("[OnnxEngine] Creating Renesas session → %s\n"

@@ -36,8 +36,8 @@ struct Config {
     int require_npu_nodes = 0;
 };
 
-// One compiled artifact set, resolved the same way the vendor's
-// check_artifacts() does.
+// One compiled artifact set, resolved the same way the vendor toolchain
+// validates an artifact set.
 struct RenesasArtifacts {
     std::string model;         // legalized_*.onnx, qdq-inserted preferred
     std::string manifest;      // <dir>/nnx/manifest.json
@@ -65,7 +65,10 @@ class OnnxEngine {
 public:
     explicit OnnxEngine(const Config& cfg);
 
-    // Create an ORT session for the ONNX model at model_path.
+    // Create an ORT session for the model at model_path.
+    // For every provider except renesas, model_path is a .onnx file path.
+    // For provider == renesas, model_path is instead a compiled artifacts
+    // directory (see resolve_renesas_artifacts).
     // The cache_prefix distinguishes per-model TRT engine cache files.
     std::unique_ptr<Ort::Session> create_session(
         const std::string& model_path,
