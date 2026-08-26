@@ -5,6 +5,7 @@ find_package(GTest REQUIRED)
 add_executable(models_tests
         test_merged_contract.cpp
         test_detections.cpp
+        test_renesas_artifacts.cpp
 )
 
 target_link_libraries(models_tests
