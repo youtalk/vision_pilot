@@ -16,6 +16,7 @@ add_library(models
     src/split_backend.cpp
     src/inference.cpp
     src/merged_contract.cpp
+    src/merged_backend.cpp
 )
 
 target_include_directories(models
