@@ -5,6 +5,7 @@
 #include <models/auto_steer.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -88,6 +89,29 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
 // or when the row count is not AutoSteerOutput::xp's size.
 void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
                     size_t count, AutoSteerOutput& out);
+
+// One level's raw graph outputs, paired with the geometry the contract declares.
+struct SpeedLevelTensors {
+    const float* box = nullptr;  // [1,4,h,w], grid units
+    const float* cls = nullptr;  // [1,num_classes,h,w], already sigmoided
+    int h = 0;
+    int w = 0;
+    int stride = 0;
+    int num_classes = 0;
+};
+
+// The [1, 4+K, N] detection buffer with layout data[c * N + n], ready for
+// decode_detections(). Boxes are multiplied by their level's stride; class
+// scores are copied unchanged. For v7: channels 8, anchors 10752.
+struct AssembledSpeed {
+    std::vector<float> data;
+    int64_t            channels = 0;  // 4 + num_classes
+    int64_t            anchors  = 0;  // sum of h*w over levels
+};
+
+// Throws std::runtime_error on an empty level list, a level with a null
+// tensor, or an inconsistent class count across levels.
+AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels);
 
 // Resolve a contract path. Checks "<model_path>.contract.json" first, then
 // "<artifacts_dir>/contract.json". Returns "" when neither exists.

@@ -478,3 +478,91 @@ TEST(ApplySteerXp, RejectsZeroDiv)
     EXPECT_THROW(apply_steer_xp(rule, logits.data(), logits.size(), out),
                  std::runtime_error);
 }
+
+TEST(AssembleSpeed, ConcatenatesLevelsAndAppliesStride)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+
+    // Two tiny levels: 1x2 at stride 8, and 1x1 at stride 16. K = 2 classes.
+    // Level A boxes [1,4,1,2] in grid units, channel-major.
+    const float box_a[8] = {1, 2,    // cx
+                            3, 4,    // cy
+                            5, 6,    // w
+                            7, 8};   // h
+    const float cls_a[4] = {0.1f, 0.2f,   // class 0
+                            0.3f, 0.4f};  // class 1
+    // Level B boxes [1,4,1,1].
+    const float box_b[4] = {9, 10, 11, 12};
+    const float cls_b[2] = {0.5f, 0.6f};
+
+    std::vector<SpeedLevelTensors> levels = {
+        {box_a, cls_a, 1, 2, 8,  2},
+        {box_b, cls_b, 1, 1, 16, 2},
+    };
+
+    const auto a = assemble_speed(levels);
+
+    EXPECT_EQ(a.channels, 6);   // 4 + K
+    EXPECT_EQ(a.anchors, 3);    // 2 + 1
+    ASSERT_EQ(a.data.size(), 18u);
+
+    const int64_t N = a.anchors;
+    // cx row: level A scaled by 8, then level B scaled by 16.
+    EXPECT_FLOAT_EQ(a.data[0 * N + 0], 1 * 8);
+    EXPECT_FLOAT_EQ(a.data[0 * N + 1], 2 * 8);
+    EXPECT_FLOAT_EQ(a.data[0 * N + 2], 9 * 16);
+    // h row.
+    EXPECT_FLOAT_EQ(a.data[3 * N + 0], 7 * 8);
+    EXPECT_FLOAT_EQ(a.data[3 * N + 2], 12 * 16);
+    // Class rows are copied without scaling.
+    EXPECT_FLOAT_EQ(a.data[4 * N + 0], 0.1f);
+    EXPECT_FLOAT_EQ(a.data[4 * N + 2], 0.5f);
+    EXPECT_FLOAT_EQ(a.data[5 * N + 1], 0.4f);
+    EXPECT_FLOAT_EQ(a.data[5 * N + 2], 0.6f);
+}
+
+TEST(AssembleSpeed, ProducesV7ShapeWithFourClasses)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+
+    // Zero-filled tensors sized like the real v7 levels; only shapes matter.
+    // K = 4, matching cls.reshape(1, 4, -1) in both reference implementations.
+    std::vector<float> b0(4 * 64 * 128), c0(4 * 64 * 128);
+    std::vector<float> b1(4 * 32 * 64),  c1(4 * 32 * 64);
+    std::vector<float> b2(4 * 16 * 32),  c2(4 * 16 * 32);
+
+    std::vector<SpeedLevelTensors> levels = {
+        {b0.data(), c0.data(), 64, 128, 8,  4},
+        {b1.data(), c1.data(), 32, 64,  16, 4},
+        {b2.data(), c2.data(), 16, 32,  32, 4},
+    };
+
+    const auto a = assemble_speed(levels);
+    EXPECT_EQ(a.anchors, 10752);
+    EXPECT_EQ(a.channels, 8);
+    EXPECT_EQ(a.data.size(), 8u * 10752u);
+}
+
+TEST(AssembleSpeed, RejectsInconsistentClassCount)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+
+    const float box[4] = {0, 0, 0, 0};
+    const float cls[2] = {0, 0};
+    std::vector<SpeedLevelTensors> levels = {
+        {box, cls, 1, 1, 8,  2},
+        {box, cls, 1, 1, 16, 1},
+    };
+    EXPECT_THROW(assemble_speed(levels), std::runtime_error);
+}
+
+TEST(AssembleSpeed, RejectsEmptyLevelList)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+    EXPECT_THROW(assemble_speed(std::vector<SpeedLevelTensors>{}),
+                 std::runtime_error);
+}

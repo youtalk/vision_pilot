@@ -194,6 +194,62 @@ void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
     out.valid = true;
 }
 
+AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels)
+{
+    if (levels.empty()) {
+        throw std::runtime_error("[MergedContract] no speed levels to assemble");
+    }
+
+    const int num_classes = levels.front().num_classes;
+    if (num_classes <= 0) {
+        throw std::runtime_error(
+            "[MergedContract] speed level has non-positive class count");
+    }
+
+    int64_t total = 0;
+    for (const auto& l : levels) {
+        if (l.box == nullptr || l.cls == nullptr) {
+            throw std::runtime_error(
+                "[MergedContract] speed level has a null tensor");
+        }
+        if (l.num_classes != num_classes) {
+            throw std::runtime_error(
+                "[MergedContract] speed levels disagree on class count: " +
+                std::to_string(num_classes) + " vs " +
+                std::to_string(l.num_classes));
+        }
+        if (l.h <= 0 || l.w <= 0 || l.stride <= 0) {
+            throw std::runtime_error(
+                "[MergedContract] speed level has non-positive extent or stride");
+        }
+        total += static_cast<int64_t>(l.h) * l.w;
+    }
+
+    AssembledSpeed out;
+    out.channels = 4 + num_classes;
+    out.anchors  = total;
+    out.data.assign(static_cast<size_t>(out.channels * out.anchors), 0.f);
+
+    int64_t offset = 0;
+    for (const auto& l : levels) {
+        const int64_t n_l = static_cast<int64_t>(l.h) * l.w;
+        const float   s   = static_cast<float>(l.stride);
+
+        for (int64_t c = 0; c < 4; ++c) {
+            const float* src = l.box + c * n_l;
+            float*       dst = out.data.data() + c * out.anchors + offset;
+            for (int64_t i = 0; i < n_l; ++i) dst[i] = src[i] * s;
+        }
+        for (int64_t k = 0; k < num_classes; ++k) {
+            const float* src = l.cls + k * n_l;
+            float*       dst = out.data.data() + (4 + k) * out.anchors + offset;
+            for (int64_t i = 0; i < n_l; ++i) dst[i] = src[i];
+        }
+        offset += n_l;
+    }
+    return out;
+}
+
 MergedContract MergedContract::from_json_string(const std::string& text)
 {
     nlohmann::json j;
