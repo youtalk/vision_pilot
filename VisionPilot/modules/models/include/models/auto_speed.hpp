@@ -25,12 +25,30 @@ struct AutoSpeedOutput {
     bool valid = false;
 };
 
+// Decode a [1, channels, anchors] detection tensor into boxes.
+// Memory layout is data[c * anchors + n]; channels = 4 + num_classes, with
+// rows 0..3 being cx, cy, w, h in model-input pixels.
+//
+// cls_is_probability distinguishes the two producers: the standalone AutoSpeed
+// graph emits class logits (false), while the merged rewrite emits
+// already-sigmoided probabilities (true). Applying sigmoid twice would
+// compress every score toward 0.5.
+//
+// Returns an invalid output (valid == false) when channels <= 4.
+AutoSpeedOutput decode_detections(const float* data,
+                                  int64_t channels,
+                                  int64_t anchors,
+                                  bool    cls_is_probability,
+                                  float   conf_thres,
+                                  float   iou_thres);
+
 // ─── Model ────────────────────────────────────────────────────────────────────
 // YOLO-style object detection model.
 //
 // Preprocessing contract (caller, before infer()):
-//   • Letterbox-resize frame to NET_W × NET_H (1024 × 512),
-//     preserving aspect ratio, padding with (114, 114, 114)
+//   • Top-crop to 2:1, then resize to NET_W × NET_H (1024 × 512),
+//     INTER_LINEAR. No letterbox and no padding — the pipeline shares this
+//     buffer with AutoSteer (see ImagePreprocessor).
 //   • Convert BGR → RGB
 //   • Scale to [0, 1] — NO ImageNet normalisation
 //   • Layout: CHW float32, CHW_SIZE elements
@@ -57,9 +75,6 @@ private:
     AutoSpeedOutput post_process(const Ort::Value& tensor,
                                  float conf_thres,
                                  float iou_thres) const;
-
-    static float iou(const Detection& a, const Detection& b);
-    static std::vector<Detection> nms(std::vector<Detection> dets, float iou_thres);
 
     std::unique_ptr<Ort::Session> session_;
     Ort::MemoryInfo               mem_info_;
