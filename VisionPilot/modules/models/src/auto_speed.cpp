@@ -123,6 +123,12 @@ AutoSpeedOutput decode_detections(const float* data,
                                   float   iou_thres)
 {
     AutoSpeedOutput out;
+
+    if (data == nullptr) {
+        printf("[AutoSpeed] Null detection buffer\n");
+        return out;
+    }
+
     const int num_classes = static_cast<int>(channels) - 4;
 
     if (num_classes <= 0) {

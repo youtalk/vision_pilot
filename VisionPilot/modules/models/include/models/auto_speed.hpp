@@ -3,6 +3,7 @@
 #include <engine/onnx_engine.hpp>
 #include <onnxruntime_cxx_api.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,7 +13,8 @@ namespace visionpilot::models {
 // ─── Output ───────────────────────────────────────────────────────────────────
 // Bounding boxes in model-input pixel space (1024 × 512) after NMS.
 // Coordinate mapping back to original image coordinates is the caller's job
-// (reverse the letterbox: subtract pad, divide by scale).
+// (reverse the preprocessing: divide by the resize scale, then add back the
+// top-crop offset — there is no pad to subtract, since no letterbox is used).
 struct Detection {
     float x1 = 0.f, y1 = 0.f;  // top-left
     float x2 = 0.f, y2 = 0.f;  // bottom-right
@@ -34,7 +36,9 @@ struct AutoSpeedOutput {
 // already-sigmoided probabilities (true). Applying sigmoid twice would
 // compress every score toward 0.5.
 //
-// Returns an invalid output (valid == false) when channels <= 4.
+// Returns an invalid output (valid == false) when channels <= 4. A
+// non-positive anchors yields a valid, empty detection list — there is
+// nothing to decode, and this matches the pre-extraction behaviour.
 AutoSpeedOutput decode_detections(const float* data,
                                   int64_t channels,
                                   int64_t anchors,

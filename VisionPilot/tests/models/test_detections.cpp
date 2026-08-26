@@ -89,3 +89,68 @@ TEST(DecodeDetections, RejectsChannelCountWithoutClasses)
     EXPECT_FALSE(out.valid);
     EXPECT_TRUE(out.detections.empty());
 }
+
+TEST(DecodeDetections, RejectsNullBuffer)
+{
+    const auto out = decode_detections(nullptr, 5, 1, true, 0.5f, 0.45f);
+    EXPECT_FALSE(out.valid);
+    EXPECT_TRUE(out.detections.empty());
+}
+
+TEST(DecodeDetections, KeepsDetectionAtConfidenceThresholdBoundary)
+{
+    // The confidence gate is a strict `<`: best_prob == conf_thres must be
+    // kept, not dropped. A swap to `<=` would fail this test.
+    const auto d = single_anchor(100.f, 50.f, 20.f, 10.f, 0.5f);
+    const auto out = decode_detections(d.data(), 5, 1,
+                                       /*cls_is_probability=*/true,
+                                       0.5f, 0.45f);
+    ASSERT_EQ(out.detections.size(), 1u);
+    EXPECT_FLOAT_EQ(out.detections[0].score, 0.5f);
+}
+
+TEST(DecodeDetections, KeepsSecondBoxWhenIouExactlyEqualsThreshold)
+{
+    // Box A: cx=100, w=20, h=10 -> [90,45]-[110,55], area 200.
+    // Box B: cx=110, w=20, h=10 -> [100,45]-[120,55], area 200.
+    // Intersection: [100,45]-[110,55] -> 10 x 10 = 100, all integer-valued
+    // and exactly representable in float, so iou_thres below is computed
+    // with the identical expression production iou() uses and is therefore
+    // bit-exactly equal to the runtime result, not a rounding-dependent
+    // guess.
+    const float inter     = 100.f;
+    const float area_a    = 200.f;
+    const float area_b    = 200.f;
+    const float iou_thres = inter / (area_a + area_b - inter + 1e-6f);
+
+    const std::vector<float> d = {
+        100.f, 110.f,   // cx
+        50.f,  50.f,    // cy
+        20.f,  20.f,    // w
+        10.f,  10.f,    // h
+        0.9f,  0.8f,    // class 0
+    };
+    const auto out = decode_detections(d.data(), 5, 2, true, 0.5f, iou_thres);
+    // The NMS suppression test is strict `>`: it does not suppress at exact
+    // equality, so both boxes survive.
+    ASSERT_EQ(out.detections.size(), 2u);
+    EXPECT_FLOAT_EQ(out.detections[0].score, 0.9f);
+    EXPECT_FLOAT_EQ(out.detections[1].score, 0.8f);
+}
+
+TEST(DecodeDetections, KeepsBothNonOverlappingBoxes)
+{
+    // Two anchors far enough apart to have zero IoU; both must survive NMS,
+    // ordered by descending score.
+    const std::vector<float> d = {
+        100.f, 1000.f,  // cx
+        50.f,  50.f,    // cy
+        20.f,  20.f,    // w
+        10.f,  10.f,    // h
+        0.9f,  0.8f,    // class 0
+    };
+    const auto out = decode_detections(d.data(), 5, 2, true, 0.5f, 0.45f);
+    ASSERT_EQ(out.detections.size(), 2u);
+    EXPECT_FLOAT_EQ(out.detections[0].score, 0.9f);
+    EXPECT_FLOAT_EQ(out.detections[1].score, 0.8f);
+}
