@@ -2,16 +2,24 @@ cmake_minimum_required(VERSION 3.22.1)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp)
+if(NOT NLOHMANN_JSON_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "[models] nlohmann/json.hpp not found. Install nlohmann-json3-dev.")
+endif()
+
 add_library(models
     src/auto_drive.cpp
     src/auto_steer.cpp
     src/auto_speed.cpp
     src/inference.cpp
+    src/merged_contract.cpp
 )
 
 target_include_directories(models
     PUBLIC
         include
+        ${NLOHMANN_JSON_INCLUDE_DIR}
 )
 
 # engine provides OnnxEngine + ORT headers/libs transitively
