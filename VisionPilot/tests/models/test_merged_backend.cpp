@@ -65,6 +65,11 @@ const std::vector<std::string> kV6Outputs = {
     "steer_lane_value", "steer_height", "drive_head_raw",
     "speed_l15_box", "speed_l15_cls"};
 
+bool contains(const std::string& haystack, const std::string& needle)
+{
+    return haystack.find(needle) != std::string::npos;
+}
+
 }  // namespace
 
 // ─── validate_contract_names ────────────────────────────────────────────────
@@ -87,29 +92,65 @@ TEST(ValidateContractNames, RejectsUnknownOutput)
     // Missing speed_l15_cls entirely.
     const std::vector<std::string> outputs = {
         "steer_height", "drive_head_raw", "steer_silu_41", "speed_l15_box"};
-    EXPECT_THROW(validate_contract_names(c, outputs), std::runtime_error);
+    try {
+        validate_contract_names(c, outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "Missing:\n    speed_l15_cls"));
+        // Every other contract-named output is present; only speed_l15_cls
+        // may be reported missing.
+        EXPECT_FALSE(contains(msg, "Missing:\n    steer_height"));
+        EXPECT_FALSE(contains(msg, "Missing:\n    drive_head_raw"));
+        EXPECT_FALSE(contains(msg, "Missing:\n    steer_silu_41"));
+        EXPECT_FALSE(contains(msg, "Missing:\n    speed_l15_box"));
+    }
 }
 
 TEST(ValidateContractNames, RejectsV6ContractAgainstV7OutputList)
 {
     // v6 needs steer_lane_value, which the v7 model does not expose.
     const auto c = MergedContract::from_json_string(kV6Contract);
-    EXPECT_THROW(validate_contract_names(c, kV7Outputs), std::runtime_error);
+    try {
+        validate_contract_names(c, kV7Outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "Missing:\n    steer_lane_value"));
+        // steer_height is common to both contracts and is in kV7Outputs; it
+        // must not be reported missing.
+        EXPECT_FALSE(contains(msg, "Missing:\n    steer_height"));
+    }
 }
 
 TEST(ValidateContractNames, RejectsV7ContractAgainstV6OutputList)
 {
     // v7 needs steer_silu_41, which the v6 model does not expose.
     const auto c = MergedContract::from_json_string(kV7Contract);
-    EXPECT_THROW(validate_contract_names(c, kV6Outputs), std::runtime_error);
+    try {
+        validate_contract_names(c, kV6Outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "Missing:\n    steer_silu_41"));
+        // drive_head_raw is common to both contracts and is in kV6Outputs;
+        // it must not be reported missing.
+        EXPECT_FALSE(contains(msg, "Missing:\n    drive_head_raw"));
+    }
 }
 
 TEST(ValidateContractNames, RejectsEgoPathSuppliedZeroTimes)
 {
     const char* json = R"({"passthrough": ["steer_height"]})";
     const auto  c = MergedContract::from_json_string(json);
-    EXPECT_THROW(validate_contract_names(c, {"steer_height"}),
-                std::runtime_error);
+    try {
+        validate_contract_names(c, {"steer_height"});
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "supplies no ego path"));
+        EXPECT_FALSE(contains(msg, "supplies the ego path twice"));
+    }
 }
 
 TEST(ValidateContractNames, RejectsEgoPathSuppliedTwice)
@@ -121,7 +162,14 @@ TEST(ValidateContractNames, RejectsEgoPathSuppliedTwice)
     const auto c = MergedContract::from_json_string(json);
     const std::vector<std::string> outputs = {
         "steer_lane_value", "steer_height", "steer_silu_41"};
-    EXPECT_THROW(validate_contract_names(c, outputs), std::runtime_error);
+    try {
+        validate_contract_names(c, outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "supplies the ego path twice"));
+        EXPECT_FALSE(contains(msg, "supplies no ego path"));
+    }
 }
 
 TEST(ValidateContractNames, RejectsMissingSteerHeightPassthrough)
@@ -134,12 +182,26 @@ TEST(ValidateContractNames, RejectsMissingSteerHeightPassthrough)
 
 TEST(ValidateContractNames, RejectsUnroutablePassthroughEntry)
 {
-    const char* json =
-        R"({"passthrough": ["steer_height", "mystery_output"]})";
+    // steer_lane_value supplies the ego path so that only the whitelist
+    // check (block 2) can fire here. Without it, deleting block 2 entirely
+    // would leave this test green: it would fail later anyway, on block 4's
+    // "supplies no ego path", which proves nothing about the whitelist.
+    const char* json = R"({
+     "passthrough": ["steer_height", "steer_lane_value", "mystery_output"]
+    })";
     const auto c = MergedContract::from_json_string(json);
     const std::vector<std::string> outputs = {"steer_height",
+                                              "steer_lane_value",
                                               "mystery_output"};
-    EXPECT_THROW(validate_contract_names(c, outputs), std::runtime_error);
+    try {
+        validate_contract_names(c, outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "'mystery_output'"));
+        EXPECT_FALSE(contains(msg, "supplies no ego path"));
+        EXPECT_FALSE(contains(msg, "supplies the ego path twice"));
+    }
 }
 
 // ─── validate_output_shapes ─────────────────────────────────────────────────
@@ -180,7 +242,18 @@ TEST(ValidateOutputShapes, RejectsSpeedGeometryMismatch)
     declared["speed_l15_cls"] =
         DeclaredOutput{{1, 5, 32, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
 
-    EXPECT_THROW(validate_output_shapes(c, declared), std::runtime_error);
+    try {
+        validate_output_shapes(c, declared);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        // cls_count = 5*32*64 = 10240; expected = num_classes(5)*h(64)*w(128)
+        // = 40960. box (4*64*128 = 32768, matching) must not be implicated.
+        EXPECT_TRUE(contains(msg, "speed_l15_cls"));
+        EXPECT_TRUE(contains(msg, "10240"));
+        EXPECT_TRUE(contains(msg, "40960"));
+        EXPECT_FALSE(contains(msg, "speed box output"));
+    }
 }
 
 TEST(ValidateOutputShapes, RejectsNonFloatOutput)
@@ -229,6 +302,37 @@ TEST(ValidateOutputShapes, ToleratesSymbolicBatchDimension)
         DeclaredOutput{{-1, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
 
     EXPECT_NO_THROW(validate_output_shapes(c, declared));
+}
+
+TEST(ValidateOutputShapes, AcceptsRank1PassthroughShape)
+{
+    // No explicit batch axis at all -- shape.size() < 2, so trailing_count()
+    // must validate the whole shape rather than skipping index 0 (which
+    // would leave nothing to check on a shape this short).
+    const char* json = R"({"passthrough": ["steer_height"]})";
+    const auto  c = MergedContract::from_json_string(json);
+
+    std::unordered_map<std::string, DeclaredOutput> declared;
+    declared["steer_height"] =
+        DeclaredOutput{{64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+
+    EXPECT_NO_THROW(validate_output_shapes(c, declared));
+}
+
+TEST(ValidateOutputShapes, RejectsRank0ScalarShape)
+{
+    // Rank 0: no batch axis to skip and no other dimension either. The
+    // product-of-remaining-dims is the empty product (1), which must still
+    // be compared against the required count (64) and rejected -- not
+    // treated as "no dimensions to check, so pass".
+    const char* json = R"({"passthrough": ["steer_height"]})";
+    const auto  c = MergedContract::from_json_string(json);
+
+    std::unordered_map<std::string, DeclaredOutput> declared;
+    declared["steer_height"] =
+        DeclaredOutput{{}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+
+    EXPECT_THROW(validate_output_shapes(c, declared), std::runtime_error);
 }
 
 TEST(ValidateOutputShapes, RejectsHeadRowCountMismatch)

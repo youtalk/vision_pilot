@@ -380,8 +380,14 @@ void MergedBackend::validate_contract() const
     std::unordered_map<std::string, DeclaredOutput> declared;
     declared.reserve(out_name_strs_.size());
     for (size_t i = 0; i < out_name_strs_.size(); ++i) {
-        const auto info =
-            session_->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo();
+        // GetOutputTypeInfo() returns Ort::TypeInfo by value -- an owning
+        // handle. GetTensorTypeAndShapeInfo() returns a non-owning view into
+        // it, valid only until the TypeInfo is freed. Bind the owning handle
+        // to a named local so it outlives the GetShape()/GetElementType()
+        // reads below; chaining the two calls in one expression would
+        // destroy the temporary at the semicolon and read freed memory.
+        const Ort::TypeInfo type_info = session_->GetOutputTypeInfo(i);
+        const auto           info     = type_info.GetTensorTypeAndShapeInfo();
         declared[out_name_strs_[i]] = DeclaredOutput{info.GetShape(),
                                                       info.GetElementType()};
     }
