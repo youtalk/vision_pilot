@@ -75,6 +75,19 @@ struct MergedContract {
 void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
                 AutoDriveOutput& out);
 
+// Decode the lane soft-argmax on the host (R8, v7). logits is a row-major
+// buffer of rows * rule.positions floats; rows is inferred from count.
+//
+//   xp[r] = softmax(logits[r]) . arange(positions) / div
+//
+// Computed in double precision with row-max subtraction before exponentiating,
+// matching the reference implementation in npu-final-check.py. Sets out.valid.
+//
+// Throws std::runtime_error when count is not a positive multiple of
+// rule.positions, or when the row count is not AutoSteerOutput::xp's size.
+void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
+                    size_t count, AutoSteerOutput& out);
+
 // Resolve a contract path. Checks "<model_path>.contract.json" first, then
 // "<artifacts_dir>/contract.json". Returns "" when neither exists.
 // Either argument may be empty.

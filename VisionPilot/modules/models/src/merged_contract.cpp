@@ -141,6 +141,50 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
     out.valid = true;
 }
 
+void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
+                    size_t count, AutoSteerOutput& out)
+{
+    const size_t positions = static_cast<size_t>(rule.positions);
+
+    if (count == 0 || count % positions != 0) {
+        throw std::runtime_error(
+            "[MergedContract] steer_xp logits hold " + std::to_string(count) +
+            " elements, which is not a positive multiple of positions=" +
+            std::to_string(positions));
+    }
+
+    const size_t rows = count / positions;
+    if (rows != out.xp.size()) {
+        throw std::runtime_error(
+            "[MergedContract] steer_xp logits describe " +
+            std::to_string(rows) + " rows but AutoSteerOutput::xp holds " +
+            std::to_string(out.xp.size()));
+    }
+
+    for (size_t r = 0; r < rows; ++r) {
+        const float* row = logits + r * positions;
+
+        // Subtract the row max before exponentiating, as the reference does;
+        // the raw logits are unbounded and expf would overflow.
+        double max_v = row[0];
+        for (size_t i = 1; i < positions; ++i) {
+            if (static_cast<double>(row[i]) > max_v) max_v = row[i];
+        }
+
+        double sum = 0.0;
+        double acc = 0.0;
+        for (size_t i = 0; i < positions; ++i) {
+            const double e = std::exp(static_cast<double>(row[i]) - max_v);
+            sum += e;
+            acc += e * static_cast<double>(i);
+        }
+
+        // sum >= 1 because the max element contributes exp(0) = 1.
+        out.xp[r] = static_cast<float>((acc / sum) / rule.div);
+    }
+    out.valid = true;
+}
+
 MergedContract MergedContract::from_json_string(const std::string& text)
 {
     nlohmann::json j;

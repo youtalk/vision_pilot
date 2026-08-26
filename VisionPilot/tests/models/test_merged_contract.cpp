@@ -7,7 +7,9 @@
 #include <models/auto_drive.hpp>
 #include <models/auto_steer.hpp>
 #include <models/merged_contract.hpp>
+#include <numeric>
 #include <string>
+#include <vector>
 
 using visionpilot::models::MergedContract;
 using visionpilot::models::resolve_contract_path;
@@ -343,4 +345,91 @@ TEST(ApplyHead, RejectsUnknownHeadOutputName)
     const float raw[1] = {1.0f};
     visionpilot::models::AutoDriveOutput out;
     EXPECT_THROW(apply_head(*c.head, raw, 1, out), std::runtime_error);
+}
+
+TEST(ApplySteerXp, UniformLogitsGiveMeanPosition)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    ASSERT_TRUE(c.steer_xp.has_value());
+
+    // All-equal logits -> uniform softmax -> expectation is the mean index.
+    // mean(arange(256)) = 127.5, divided by 256 -> 0.498046875.
+    std::vector<float> logits(64 * 256, 3.14f);
+
+    visionpilot::models::AutoSteerOutput out;
+    apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out);
+
+    for (size_t r = 0; r < out.xp.size(); ++r) {
+        EXPECT_NEAR(out.xp[r], 127.5f / 256.0f, 1e-6f) << "row " << r;
+    }
+}
+
+TEST(ApplySteerXp, OneHotLogitsGiveThatPosition)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+
+    // Row r peaks hard at column r*4, so the expectation lands there.
+    std::vector<float> logits(64 * 256, -60.0f);
+    for (int r = 0; r < 64; ++r) logits[r * 256 + r * 4] = 60.0f;
+
+    visionpilot::models::AutoSteerOutput out;
+    apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out);
+
+    for (int r = 0; r < 64; ++r) {
+        EXPECT_NEAR(out.xp[r], (r * 4) / 256.0f, 1e-5f) << "row " << r;
+    }
+}
+
+TEST(ApplySteerXp, IsStableAgainstLargeLogits)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+
+    // Without max-subtraction these would overflow expf and produce NaN.
+    std::vector<float> logits(64 * 256, 10000.0f);
+
+    visionpilot::models::AutoSteerOutput out;
+    apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out);
+
+    for (size_t r = 0; r < out.xp.size(); ++r) {
+        EXPECT_FALSE(std::isnan(out.xp[r])) << "row " << r;
+        EXPECT_NEAR(out.xp[r], 127.5f / 256.0f, 1e-6f);
+    }
+}
+
+TEST(ApplySteerXp, SetsValidAndMarksSteerUsable)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    std::vector<float> logits(64 * 256, 0.0f);
+
+    visionpilot::models::AutoSteerOutput out;
+    ASSERT_FALSE(out.valid);
+    apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out);
+    EXPECT_TRUE(out.valid);
+}
+
+TEST(ApplySteerXp, RejectsCountThatIsNotAMultipleOfPositions)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    std::vector<float> logits(64 * 256 - 1, 0.0f);
+
+    visionpilot::models::AutoSteerOutput out;
+    EXPECT_THROW(apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out),
+                 std::runtime_error);
+}
+
+TEST(ApplySteerXp, RejectsWrongRowCount)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    // 32 rows, not the 64 AutoSteerOutput::xp holds.
+    std::vector<float> logits(32 * 256, 0.0f);
+
+    visionpilot::models::AutoSteerOutput out;
+    EXPECT_THROW(apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out),
+                 std::runtime_error);
 }
