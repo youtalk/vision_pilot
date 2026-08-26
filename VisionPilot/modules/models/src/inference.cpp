@@ -9,8 +9,6 @@
 
 #include <chrono>
 #include <cstring>
-#include <future>
-#include <utility>
 #include <vector>
 
 namespace visionpilot::models {
@@ -71,7 +69,7 @@ void LatencyStats::print() const
     // exist; ad carries the whole Run.
     if (as == 0.0 && asp == 0.0) {
         VP_INFO("Latency  pre=%.1f ms  merged=%.1f ms  wall=%.1f ms  %.0f fps",
-                pre, ad, wall, fps);
+                pre, ad, total, fps);
         return;
     }
     VP_INFO("Latency  pre=%.1f ms  AD=%.1f ms  AS=%.1f ms  ASp=%.1f ms  "
