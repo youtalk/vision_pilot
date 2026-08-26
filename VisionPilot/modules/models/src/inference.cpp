@@ -8,6 +8,7 @@
 
 #include <opencv2/imgproc.hpp>
 
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
@@ -55,6 +56,20 @@ std::vector<float> chw_01(const cv::Mat& bgr)
     return out;
 }
 
+// Case-insensitive match against a sentinel that is itself lower-case, so a
+// typo like "Auto" or "NONE" is recognised as the sentinel rather than
+// silently falling through to the explicit-path branch and failing later
+// with a message that names neither the real mistake nor the valid choices.
+bool ieq_sentinel(const std::string& value, const char* sentinel)
+{
+    size_t i = 0;
+    for (; i < value.size() && sentinel[i] != '\0'; ++i) {
+        if (std::tolower(static_cast<unsigned char>(value[i])) != sentinel[i])
+            return false;
+    }
+    return i == value.size() && sentinel[i] == '\0';
+}
+
 }  // namespace
 
 void LatencyStats::update(double pre_, double ad_, double as_, double asp_, double wall_)
@@ -81,40 +96,50 @@ void LatencyStats::print() const
 
 void LatencyStats::reset() { *this = {}; }
 
-InferencePipeline::InferencePipeline(engine::OnnxEngine& engine, const Config& cfg)
+std::optional<MergedTarget> resolve_merged_target(const engine::Config& engine_cfg,
+                                                   const Config&         cfg)
 {
-    if (cfg.merged) {
-        const bool renesas = engine.config().provider == "renesas";
-        const std::string model_or_dir =
-            renesas ? engine.config().artifacts_dir : cfg.merged_path;
-        if (model_or_dir.empty()) {
-            throw std::runtime_error(
-                renesas
-                    ? "[InferencePipeline] engine.artifacts_dir is required "
-                      "when engine.provider = renesas"
-                    : "[InferencePipeline] model.merged_path is required when "
-                      "model.merged = true");
-        }
-
-        std::string contract_path;
-        if (cfg.contract == "auto") {
-            contract_path = resolve_contract_path(
-                renesas ? std::string{} : model_or_dir,
-                renesas ? model_or_dir : std::string{});
-        } else if (cfg.contract != "none") {
-            contract_path = cfg.contract;
-        }
-
-        backend_ = std::make_unique<MergedBackend>(engine, model_or_dir,
-                                                   contract_path);
-    } else {
-        if (engine.config().provider == "renesas") {
+    if (!cfg.merged) {
+        if (engine_cfg.provider == "renesas") {
             throw std::runtime_error(
                 "[InferencePipeline] engine.provider = renesas requires "
                 "model.merged = true. The Renesas execution provider permits "
                 "one NPU session per process, so a three-session split would "
                 "place two of the three networks on a silent CPU fallback.");
         }
+        return std::nullopt;
+    }
+
+    const bool renesas = engine_cfg.provider == "renesas";
+    const std::string model_or_dir =
+        renesas ? engine_cfg.artifacts_dir : cfg.merged_path;
+    if (model_or_dir.empty()) {
+        throw std::runtime_error(
+            renesas
+                ? "[InferencePipeline] engine.artifacts_dir is required "
+                  "when engine.provider = renesas"
+                : "[InferencePipeline] model.merged_path is required when "
+                  "model.merged = true");
+    }
+
+    std::string contract_path;
+    if (ieq_sentinel(cfg.contract, "auto")) {
+        contract_path = resolve_contract_path(
+            renesas ? std::string{} : model_or_dir,
+            renesas ? model_or_dir : std::string{});
+    } else if (!ieq_sentinel(cfg.contract, "none")) {
+        contract_path = cfg.contract;
+    }
+
+    return MergedTarget{model_or_dir, contract_path};
+}
+
+InferencePipeline::InferencePipeline(engine::OnnxEngine& engine, const Config& cfg)
+{
+    if (auto target = resolve_merged_target(engine.config(), cfg)) {
+        backend_ = std::make_unique<MergedBackend>(engine, target->model_or_dir,
+                                                   target->contract_path);
+    } else {
         backend_ = std::make_unique<SplitBackend>(engine, cfg.precision);
     }
 

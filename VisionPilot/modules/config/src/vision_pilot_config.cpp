@@ -131,7 +131,7 @@ Config load_vision_pilot_config()
     cfg.inference.merged      = parse_bool(optional(kv, "model.merged", "false"),
                                            "model.merged");
     cfg.inference.merged_path = expand_home(optional(kv, "model.merged_path", ""));
-    cfg.inference.contract    = optional(kv, "model.contract", "auto");
+    cfg.inference.contract    = expand_home(optional(kv, "model.contract", "auto"));
 
     cfg.source.mode          = parse_source_mode(optional(kv, "source.mode", "video"));
 
