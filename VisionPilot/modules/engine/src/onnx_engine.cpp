@@ -224,8 +224,11 @@ std::unique_ptr<Ort::Session> OnnxEngine::create_renesas_session(
     const auto art = resolve_renesas_artifacts(model_path);
 
     Ort::SessionOptions opts;
-    // The qdq-inserted model must not be re-optimised; the vendor's
-    // check_artifacts() forces this too.
+    // Disabled unconditionally, not only for the qdq-inserted variant: both
+    // model variants are compiled ahead of time against a fixed node
+    // structure, so ORT rewriting either graph risks the execution provider
+    // no longer matching its compiled subgraphs and silently shedding them
+    // to CPU.
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
 
     // Profiling powers the startup offload gate: the emitted JSON records the
