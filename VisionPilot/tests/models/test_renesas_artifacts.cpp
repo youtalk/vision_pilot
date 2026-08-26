@@ -1,13 +1,16 @@
 #include <gtest/gtest.h>
 #include <engine/onnx_engine.hpp>
+#include <models/merged_backend.hpp>
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
 
 namespace fs = std::filesystem;
+namespace models = visionpilot::models;
 using visionpilot::engine::Config;
 using visionpilot::engine::OnnxEngine;
 using visionpilot::engine::parse_profile_providers;
@@ -233,13 +236,35 @@ TEST_F(ArtifactsDir, ProfileWithNoNodeEventsIsEmpty)
 
 TEST_F(ArtifactsDir, MissingProfileThrows)
 {
-    EXPECT_THROW(parse_profile_providers((root_ / "nope.json").string()),
-                 std::runtime_error);
+    const auto p = (root_ / "nope.json").string();
+
+    try {
+        parse_profile_providers(p);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        // The path is what separates an environmental fault (wrong path,
+        // unwritable CWD) from a genuine offload failure -- it must be
+        // named, not just "something went wrong."
+        EXPECT_NE(msg.find(p), std::string::npos) << msg;
+        // This is a file-access problem, not an offload verdict: it must
+        // not read like one of the gate's own pass/fail messages.
+        EXPECT_EQ(msg.find("offload"), std::string::npos) << msg;
+        EXPECT_EQ(msg.find("NPU"), std::string::npos) << msg;
+    }
 }
 
 TEST_F(ArtifactsDir, EmptyProfilePathThrows)
 {
-    EXPECT_THROW(parse_profile_providers(""), std::runtime_error);
+    try {
+        parse_profile_providers("");
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        // Must read as "no path was given," not as "cannot open profile "
+        // trailing off into nothing.
+        EXPECT_NE(msg.find("empty"), std::string::npos) << msg;
+    }
 }
 
 TEST_F(ArtifactsDir, MalformedProfileJsonThrows)
@@ -248,19 +273,66 @@ TEST_F(ArtifactsDir, MalformedProfileJsonThrows)
     fs::create_directories(root_);
     std::ofstream(p) << R"({"cat": "Node", "name": )";  // truncated, invalid JSON
 
-    EXPECT_THROW(parse_profile_providers(p.string()), std::runtime_error);
+    try {
+        parse_profile_providers(p.string());
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find(p.string()), std::string::npos) << msg;
+    }
 }
 
-TEST_F(ArtifactsDir, NonArrayProfileJsonIsEmpty)
+TEST_F(ArtifactsDir, ZeroByteProfileFileThrows)
 {
-    // Valid JSON, but not the array of events ORT emits. Treated as "no node
-    // events found" rather than an error: the offload gate itself is what
-    // must refuse an empty histogram, not this parser.
+    const auto p = root_ / "zero_byte_profile.json";
+    fs::create_directories(root_);
+    std::ofstream out(p);  // create, write nothing
+    out.close();
+
+    try {
+        parse_profile_providers(p.string());
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find(p.string()), std::string::npos) << msg;
+    }
+}
+
+TEST_F(ArtifactsDir, NonArrayProfileJsonThrows)
+{
+    // Valid JSON, but not the array of events ORT emits. This must be an
+    // error, not "no node events found": ORT profiling output is always a
+    // top-level array, so anything else means this is not the profile the
+    // gate thinks it is (wrong file, wrong tool, truncated write), and
+    // reporting an empty histogram for it would let that environmental
+    // problem masquerade as "the NPU did no work."
     const auto p = root_ / "object_profile.json";
     fs::create_directories(root_);
     std::ofstream(p) << R"({"not": "an array"})";
 
-    EXPECT_TRUE(parse_profile_providers(p.string()).empty());
+    try {
+        parse_profile_providers(p.string());
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find(p.string()), std::string::npos) << msg;
+    }
+}
+
+TEST_F(ArtifactsDir, ArrayWithNonObjectElementIsSkipped)
+{
+    const auto p = root_ / "non_object_element_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"([
+      42,
+      "a stray string",
+      {"cat":"Node","name":"Conv_1_kernel_time","dur":10,
+       "args":{"provider":"RenesasExecutionProvider"}}
+    ])";
+
+    const auto hist = parse_profile_providers(p.string());
+    EXPECT_EQ(hist.at("RenesasExecutionProvider"), 1);
+    EXPECT_EQ(hist.size(), 1u);
 }
 
 TEST_F(ArtifactsDir, KernelTimeEventMissingArgsOrProviderIsSkipped)
@@ -277,6 +349,77 @@ TEST_F(ArtifactsDir, KernelTimeEventMissingArgsOrProviderIsSkipped)
     const auto hist = parse_profile_providers(p.string());
     EXPECT_EQ(hist.at("RenesasExecutionProvider"), 1);
     EXPECT_EQ(hist.size(), 1u);
+}
+
+TEST_F(ArtifactsDir, NonStringNameOrProviderIsSkipped)
+{
+    // A numeric "name" cannot match the "*_kernel_time" suffix check, and a
+    // null "provider" cannot be counted as a provider -- both must be
+    // skipped, not throw nlohmann::json::type_error escaping uncaught.
+    const auto p = root_ / "non_string_fields_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"([
+      {"cat":"Node","name":5,"dur":10,
+       "args":{"provider":"RenesasExecutionProvider"}},
+      {"cat":"Node","name":"Conv_1_kernel_time","dur":10,
+       "args":{"provider":null}},
+      {"cat":"Node","name":"Conv_2_kernel_time","dur":10,
+       "args":{"provider":"RenesasExecutionProvider"}}
+    ])";
+
+    const auto hist = parse_profile_providers(p.string());
+    EXPECT_EQ(hist.at("RenesasExecutionProvider"), 1);
+    EXPECT_EQ(hist.size(), 1u);
+}
+
+// ─── The offload gate's decision logic ───────────────────────────────────────
+//
+// check_offload() takes only a histogram and a required count, so its three
+// safety-critical behaviours are testable without a Renesas execution
+// provider.
+
+TEST_F(ArtifactsDir, CheckOffloadZeroRequiredMeansAtLeastOne)
+{
+    // require_npu_nodes's default, 0, must mean "at least one," not
+    // "require none."
+    EXPECT_THROW(models::check_offload({}, /*required=*/0),
+                 std::runtime_error);
+    EXPECT_EQ(models::check_offload(
+                  {{"RenesasExecutionProvider", 1}}, /*required=*/0),
+              1);
+}
+
+TEST_F(ArtifactsDir, CheckOffloadThrowsOnZeroRenesasNodes)
+{
+    const std::map<std::string, int> hist = {{"CPUExecutionProvider", 40}};
+    try {
+        models::check_offload(hist, /*required=*/0);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("0"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("RenesasExecutionProvider"), std::string::npos)
+            << msg;
+    }
+}
+
+TEST_F(ArtifactsDir, CheckOffloadThrowsWhenBelowConfiguredFloor)
+{
+    const std::map<std::string, int> hist = {
+        {"RenesasExecutionProvider", 3}, {"CPUExecutionProvider", 1}};
+
+    // Passes its own floor...
+    EXPECT_EQ(models::check_offload(hist, /*required=*/3), 3);
+    // ...but a recompile that sheds one subgraph to the CPU must fail a
+    // higher configured floor, naming both counts.
+    try {
+        models::check_offload(hist, /*required=*/5);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("3"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("5"), std::string::npos) << msg;
+    }
 }
 
 // ─── OnnxEngine-level guards ─────────────────────────────────────────────────

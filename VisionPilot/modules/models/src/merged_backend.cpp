@@ -312,7 +312,17 @@ MergedBackend::MergedBackend(engine::OnnxEngine& engine,
                                             : contract_->attn_mode.c_str(),
                contract_->steer_xp ? "host soft-argmax (v7 R8)"
                                    : "graph output (v6)");
-        if (!contract_->attn_mode.empty() && contract_->attn_mode != "keep") {
+        if (contract_->attn_mode.empty()) {
+            // Unset is not the same claim as "degraded" -- it means this
+            // contract never said which attention mode is live, so xp's
+            // fidelity is simply unknown. Treating unset as safe-by-default
+            // would defeat the point of a gate whose whole job is telling
+            // the operator which mode is actually in effect.
+            printf("[MergedBackend] WARNING: attn_mode is unset in the "
+                   "contract. Whether the ego-path output (AutoSteer xp) is "
+                   "degraded is unknown -- do not treat xp as "
+                   "reference-quality until attn_mode is confirmed.\n");
+        } else if (contract_->attn_mode != "keep") {
             printf("[MergedBackend] WARNING: attn_mode='%s' — the ego-path "
                    "output (AutoSteer xp) is degraded. openadkit measured lane "
                    "correlation 0.653-0.954 against the CPU reference for "
@@ -580,6 +590,30 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
     return out;
 }
 
+int check_offload(const std::map<std::string, int>& hist, int required)
+{
+    // A configured 0 -- engine::Config::require_npu_nodes's default -- means
+    // "require at least one," never "require none." A configured negative
+    // value (never asked for by the brief, but not guarded against there
+    // either) is treated the same as 0 rather than as a floor of zero.
+    const int floor = required > 0 ? required : 1;
+
+    const auto it = hist.find("RenesasExecutionProvider");
+    const int npu_nodes = it == hist.end() ? 0 : it->second;
+
+    if (npu_nodes < floor) {
+        throw std::runtime_error(
+            "[MergedBackend] NPU offload gate FAILED: " +
+            std::to_string(npu_nodes) + " nodes on RenesasExecutionProvider, "
+            "required at least " + std::to_string(floor) +
+            ". The CPU execution provider is a silent fallback, so a run "
+            "that completes is not proof of offload. Check that the "
+            "artifacts match this model and that their recorded "
+            "compile-host paths are mounted.");
+    }
+    return npu_nodes;
+}
+
 void MergedBackend::verify_offload(const float* prev_imn,
                                    const float* curr_imn,
                                    const float* curr_01)
@@ -587,35 +621,52 @@ void MergedBackend::verify_offload(const float* prev_imn,
     if (provider_ != "renesas") return;
 
     printf("[MergedBackend] Offload gate: running one warm-up frame\n");
-    (void)run(prev_imn, curr_imn, curr_01);
+    const auto probe = run(prev_imn, curr_imn, curr_01);
 
+    // End profiling right after the probe, win or lose: leaving it enabled
+    // would accumulate a profiling event per op for the rest of the
+    // process's life, and the returned path is needed either way to name
+    // the profile in the error below.
     Ort::AllocatorWithDefaultOptions alloc;
     const auto profile = session_->EndProfilingAllocated(alloc);
     const std::string profile_path = profile.get();
 
+    if (probe.ad_ms <= 0.0) {
+        // run() catches its own inference errors, prints them, and returns
+        // a default-constructed BackendOutputs -- ad_ms is set only after
+        // session_->Run() itself succeeds. Without this check, a probe that
+        // never actually ran would fall straight into an empty-histogram
+        // "the NPU did no work" verdict, misreporting an inference failure
+        // as an offload failure.
+        throw std::runtime_error(
+            "[MergedBackend] NPU offload gate FAILED: the probe run did not "
+            "complete (see the inference error printed above), so no "
+            "profile can be trusted to prove or disprove NPU offload. "
+            "Profile: " + profile_path);
+    }
+
     const auto hist = engine::parse_profile_providers(profile_path);
 
     printf("[MergedBackend] Node placement:\n");
-    int npu_nodes = 0;
     for (const auto& [prov, n] : hist) {
-        printf("             %-32s %d\n", prov.c_str(), n);
-        if (prov == "RenesasExecutionProvider") npu_nodes = n;
+        printf("[MergedBackend]   %-32s %d\n", prov.c_str(), n);
+    }
+
+    int npu_nodes = 0;
+    try {
+        npu_nodes = check_offload(hist, require_npu_nodes_);
+    } catch (const std::runtime_error& e) {
+        // check_offload() is a pure function of (hist, required) so its own
+        // message cannot name the file that hist came from; re-attach it
+        // here so the FAILED message still points at the profile to inspect,
+        // matching the probe-failure branch above.
+        throw std::runtime_error(std::string(e.what()) +
+                                  " Profile: " + profile_path);
     }
 
     const int required = require_npu_nodes_ > 0 ? require_npu_nodes_ : 1;
-    if (npu_nodes < required) {
-        throw std::runtime_error(
-            "[MergedBackend] NPU offload gate FAILED: " +
-            std::to_string(npu_nodes) + " nodes on RenesasExecutionProvider, "
-            "required at least " + std::to_string(required) +
-            ". The CPU execution provider is a silent fallback, so a run that "
-            "completes is not proof of offload. Check that the artifacts match "
-            "this model and that their recorded compile-host paths are "
-            "mounted. Profile: " + profile_path);
-    }
-
-    printf("[MergedBackend] Offload gate PASSED — %d nodes on the NPU\n",
-           npu_nodes);
+    printf("[MergedBackend] Offload gate PASSED — %d nodes on the NPU "
+           "(required at least %d)\n", npu_nodes, required);
 }
 
 }  // namespace visionpilot::models

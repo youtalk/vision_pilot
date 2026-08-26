@@ -5,6 +5,7 @@
 #include <models/merged_contract.hpp>
 #include <onnxruntime_cxx_api.h>
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -65,6 +66,23 @@ void validate_output_shapes(
 // half-filled (or all-zero) frame as good.
 // Throws std::runtime_error naming what is missing.
 void validate_plain_merged_names(const std::vector<std::string>& output_names);
+
+// The NPU offload gate's decision, factored out of verify_offload() so it is
+// testable without a Renesas execution provider: hist is a per-provider node
+// histogram (from engine::parse_profile_providers), and required is the
+// configured engine.require_npu_nodes value as-is, including 0.
+//
+// required <= 0 means "require at least one" -- 0 is
+// engine::Config::require_npu_nodes's default and must not be read as
+// "require none". A configured positive value is used as the floor
+// directly. Returns the number of nodes actually placed on
+// RenesasExecutionProvider when the gate passes.
+//
+// Throws std::runtime_error naming both the found and required node counts
+// when hist has no RenesasExecutionProvider entry, or fewer nodes on it
+// than the floor -- the CPU execution provider is a silent fallback, so
+// neither case may be treated as success.
+int check_offload(const std::map<std::string, int>& hist, int required);
 
 // All three networks in one ONNX Runtime session. Required for the Renesas
 // execution provider, which permits only one NPU session per process.

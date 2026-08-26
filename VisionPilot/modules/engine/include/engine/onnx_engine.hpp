@@ -64,7 +64,14 @@ RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir);
 // Ort::GetAvailableProviders() is global and would report Renesas as available
 // even when every node ran on the CPU.
 //
-// Throws std::runtime_error when the file cannot be read or parsed.
+// Throws std::runtime_error, naming profile_json_path, when the path is
+// empty, the file cannot be opened, the JSON is malformed, or the parsed
+// JSON is not a top-level array (ORT profiling output always is -- treating
+// that case as "zero events found" would let a wrong-file/environment
+// problem masquerade as "the NPU did no work"). An event missing "name",
+// "args", or "args.provider", or with a non-string value in either field,
+// is skipped rather than counted; it is never treated as fatal, since a
+// skip can only ever lower a provider's count, never raise it.
 std::map<std::string, int> parse_profile_providers(
     const std::string& profile_json_path);
 

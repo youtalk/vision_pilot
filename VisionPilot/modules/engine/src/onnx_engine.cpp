@@ -120,6 +120,13 @@ RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir)
 std::map<std::string, int> parse_profile_providers(
     const std::string& profile_json_path)
 {
+    if (profile_json_path.empty()) {
+        throw std::runtime_error(
+            "[OnnxEngine] profile_json_path is empty -- profiling was "
+            "never enabled for this session, or EndProfilingAllocated() "
+            "was never called");
+    }
+
     std::ifstream in(profile_json_path);
     if (!in) {
         throw std::runtime_error(
@@ -131,14 +138,26 @@ std::map<std::string, int> parse_profile_providers(
         in >> j;
     } catch (const nlohmann::json::exception& e) {
         throw std::runtime_error(
-            std::string("[OnnxEngine] malformed profile JSON: ") + e.what());
+            "[OnnxEngine] malformed profile JSON " + profile_json_path +
+            ": " + e.what());
+    }
+
+    // ORT profiling output is always a top-level array of events. Anything
+    // else means this is not the file the gate thinks it is -- reporting an
+    // empty histogram here would let the gate announce "the NPU did no
+    // work" for what is actually a wrong-file/environment problem.
+    if (!j.is_array()) {
+        throw std::runtime_error(
+            "[OnnxEngine] profile is not a JSON array (ORT profiling "
+            "output is always a top-level array): " + profile_json_path);
     }
 
     std::map<std::string, int> hist;
-    if (!j.is_array()) return hist;
-
     for (const auto& ev : j) {
-        if (!ev.is_object() || !ev.contains("name")) continue;
+        if (!ev.is_object() || !ev.contains("name") ||
+            !ev["name"].is_string()) {
+            continue;
+        }
         const auto name = ev["name"].get<std::string>();
 
         static const std::string kSuffix = "_kernel_time";
@@ -149,7 +168,9 @@ std::map<std::string, int> parse_profile_providers(
         }
         if (!ev.contains("args") || !ev["args"].is_object()) continue;
         const auto& args = ev["args"];
-        if (!args.contains("provider")) continue;
+        if (!args.contains("provider") || !args["provider"].is_string()) {
+            continue;
+        }
 
         ++hist[args["provider"].get<std::string>()];
     }
@@ -303,7 +324,18 @@ std::unique_ptr<Ort::Session> OnnxEngine::create_renesas_session(
     // Profiling powers the startup offload gate: the emitted JSON records the
     // execution provider each node actually ran on. There is no C++ API to
     // query node placement directly.
-    opts.EnableProfiling("visionpilot_renesas_profile");
+    //
+    // The prefix is deliberately anchored under the system temp directory
+    // rather than left as a bare relative name: a relative prefix resolves
+    // against the process's current working directory, which may be
+    // read-only in a container. If the profiler cannot open its output
+    // there, EndProfilingAllocated() still returns a path -- to a file that
+    // was never written -- and the gate would refuse to start on a
+    // perfectly healthy NPU instead of catching a genuine offload failure.
+    const std::string profile_prefix =
+        (std::filesystem::temp_directory_path() / "visionpilot_renesas_profile")
+            .string();
+    opts.EnableProfiling(profile_prefix.c_str());
 
     const std::unordered_map<std::string, std::string> po = {
         {"mode",          "runtime"},
