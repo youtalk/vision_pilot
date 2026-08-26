@@ -3,12 +3,14 @@
 #include <common/utils.hpp>
 #include <logging/logger.hpp>
 #include <models/backend.hpp>
+#include <models/merged_backend.hpp>
 #include <models/split_backend.hpp>
 
 #include <opencv2/imgproc.hpp>
 
 #include <chrono>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 
 namespace visionpilot::models {
@@ -81,7 +83,40 @@ void LatencyStats::reset() { *this = {}; }
 
 InferencePipeline::InferencePipeline(engine::OnnxEngine& engine, const Config& cfg)
 {
-    backend_ = std::make_unique<SplitBackend>(engine, cfg.precision);
+    if (cfg.merged) {
+        const bool renesas = engine.config().provider == "renesas";
+        const std::string model_or_dir =
+            renesas ? engine.config().artifacts_dir : cfg.merged_path;
+        if (model_or_dir.empty()) {
+            throw std::runtime_error(
+                renesas
+                    ? "[InferencePipeline] engine.artifacts_dir is required "
+                      "when engine.provider = renesas"
+                    : "[InferencePipeline] model.merged_path is required when "
+                      "model.merged = true");
+        }
+
+        std::string contract_path;
+        if (cfg.contract == "auto") {
+            contract_path = resolve_contract_path(
+                renesas ? std::string{} : model_or_dir,
+                renesas ? model_or_dir : std::string{});
+        } else if (cfg.contract != "none") {
+            contract_path = cfg.contract;
+        }
+
+        backend_ = std::make_unique<MergedBackend>(engine, model_or_dir,
+                                                   contract_path);
+    } else {
+        if (engine.config().provider == "renesas") {
+            throw std::runtime_error(
+                "[InferencePipeline] engine.provider = renesas requires "
+                "model.merged = true. The Renesas execution provider permits "
+                "one NPU session per process, so a three-session split would "
+                "place two of the three networks on a silent CPU fallback.");
+        }
+        backend_ = std::make_unique<SplitBackend>(engine, cfg.precision);
+    }
 
     fusion::LongitudinalFusion::Config lc;
     lc.debug           = cfg.fusion_debug;
@@ -153,6 +188,14 @@ std::optional<InferenceFrameResult> InferencePipeline::process(const cv::Mat& wa
     auto curr_imn    = chw_imagenet(curr_frame_);
     auto curr_01_as  = chw_01(as_input);
     const double ms_pre = Ms(Clock::now() - t0).count();
+
+    if (!offload_verified_) {
+        offload_verified_ = true;
+        if (auto* merged = dynamic_cast<MergedBackend*>(backend_.get())) {
+            merged->verify_offload(prev_imn.data(), curr_imn.data(),
+                                    curr_01_as.data());
+        }
+    }
 
     auto t_wall = Clock::now();
     const BackendOutputs r = backend_->run(prev_imn.data(), curr_imn.data(),

@@ -24,6 +24,17 @@ struct Config {
     std::string precision    = "fp32";
     bool        fusion_debug = false;
     float       cte_bias_m   = 0.0f;  // camera mounting offset [m] — subtracted from raw CTE before filter
+
+    // Run all three networks in one session over a merged graph. Required for
+    // the renesas provider, which permits only one NPU session per process.
+    bool        merged = false;
+    // Merged .onnx path. Ignored under the renesas provider, which uses
+    // engine.artifacts_dir instead.
+    std::string merged_path;
+    // "auto" resolves <merged_path>.contract.json or
+    // <artifacts_dir>/contract.json. "none" forces plain-merged mode.
+    // Anything else is treated as an explicit contract path.
+    std::string contract = "auto";
 };
 
 struct LatencyStats {
@@ -92,6 +103,8 @@ private:
     cv::Mat prev_frame_;
     cv::Mat curr_frame_;
     int     frame_buf_count_ = 0;
+
+    bool offload_verified_ = false;
 };
 
 }  // namespace visionpilot::models

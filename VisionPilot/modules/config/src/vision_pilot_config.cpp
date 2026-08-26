@@ -119,11 +119,19 @@ Config load_vision_pilot_config()
     cfg.engine.device_id    = parse_int(optional(kv, "engine.device_id", "0"), "engine.device_id");
     cfg.engine.cache_dir    = expand_home(optional(kv, "engine.cache_dir", "/tmp/visionpilot_trt_cache"));
     cfg.engine.workspace_gb = parse_double(optional(kv, "engine.workspace_gb", "1.0"), "engine.workspace_gb");
+    cfg.engine.artifacts_dir  = expand_home(optional(kv, "engine.artifacts_dir", ""));
+    cfg.engine.arc_prog_path  = expand_home(optional(kv, "engine.arc_prog_path", ""));
+    cfg.engine.require_npu_nodes = parse_int(
+        optional(kv, "engine.require_npu_nodes", "0"), "engine.require_npu_nodes");
 
     cfg.inference.precision    = optional(kv, "model.precision",    "fp32");
     cfg.inference.fusion_debug = parse_bool(optional(kv, "fusion.debug", "false"), "fusion.debug");
     cfg.inference.cte_bias_m   = static_cast<float>(
         parse_double(optional(kv, "fusion.cte_bias_m", "0.0"), "fusion.cte_bias_m"));
+    cfg.inference.merged      = parse_bool(optional(kv, "model.merged", "false"),
+                                           "model.merged");
+    cfg.inference.merged_path = expand_home(optional(kv, "model.merged_path", ""));
+    cfg.inference.contract    = optional(kv, "model.contract", "auto");
 
     cfg.source.mode          = parse_source_mode(optional(kv, "source.mode", "video"));
 
