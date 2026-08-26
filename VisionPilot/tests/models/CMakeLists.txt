@@ -19,3 +19,11 @@ target_link_libraries(models_tests
 )
 
 target_compile_features(models_tests PRIVATE cxx_std_17)
+
+option(ENABLE_MERGED_EQUIVALENCE_TEST
+       "Build the split-vs-merged equivalence test (needs the ~147 MB merged ONNX)"
+       OFF)
+
+if(ENABLE_MERGED_EQUIVALENCE_TEST)
+    target_sources(models_tests PRIVATE test_merged_equivalence.cpp)
+endif()
