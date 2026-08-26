@@ -16,22 +16,260 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Ms    = std::chrono::duration<double, std::milli>;
 
-// Copy a 64-element tensor into a fixed 64-float array.
+// Copy a fixed-size 64-element tensor into a fixed 64-float array. Rejects an
+// undersized tensor (would read past its end) and an oversized one (would
+// otherwise be silently truncated) alike.
 void copy_64(const Ort::Value& v, std::array<float, 64>& dst,
              const std::string& name)
 {
     const auto info = v.GetTensorTypeAndShapeInfo();
-    if (info.GetElementCount() < dst.size()) {
+    if (info.GetElementCount() != dst.size()) {
         throw std::runtime_error(
             "[MergedBackend] output '" + name + "' has " +
-            std::to_string(info.GetElementCount()) +
-            " elements, expected at least 64");
+            std::to_string(info.GetElementCount()) + " elements, expected "
+            "exactly " + std::to_string(dst.size()));
     }
     std::memcpy(dst.data(), v.GetTensorData<float>(),
                 dst.size() * sizeof(float));
 }
 
 }  // namespace
+
+void validate_contract_names(const MergedContract&           contract,
+                             const std::vector<std::string>& output_names)
+{
+    // 1. Every name the contract mentions must exist in the session. This is
+    //    also what catches a v6 contract paired with a v7 model (which does not
+    //    output steer_lane_value) and the reverse (no steer_silu_41).
+    const auto exists = [&](const std::string& name) {
+        for (const auto& n : output_names) {
+            if (n == name) return true;
+        }
+        return false;
+    };
+
+    std::vector<std::string> missing;
+    const auto require = [&](const std::string& name) {
+        if (!exists(name)) missing.push_back(name);
+    };
+
+    for (const auto& n : contract.passthrough) require(n);
+    if (contract.head)     require(contract.head->output);
+    if (contract.steer_xp) require(contract.steer_xp->logits);
+    if (contract.speed) {
+        for (const auto& l : contract.speed->levels) {
+            require(l.box);
+            require(l.cls);
+        }
+    }
+
+    if (!missing.empty()) {
+        std::string msg =
+            "[MergedBackend] the contract names outputs this session does not "
+            "expose.\n  Missing:";
+        for (const auto& m : missing) msg += "\n    " + m;
+        msg += "\n  Session outputs:";
+        for (const auto& n : output_names) msg += "\n    " + n;
+        throw std::runtime_error(msg);
+    }
+
+    // 2. Every passthrough entry must be one this backend actually knows how
+    //    to route. run() dispatches by exact name; an entry that reached this
+    //    far unrecognised would throw on every single frame instead of here.
+    bool lane_passthrough   = false;
+    bool height_passthrough = false;
+    for (const auto& n : contract.passthrough) {
+        if (n == "steer_lane_value") {
+            lane_passthrough = true;
+        } else if (n == "steer_height") {
+            height_passthrough = true;
+        } else {
+            throw std::runtime_error(
+                "[MergedBackend] the contract's passthrough list names '" + n +
+                "', which this backend does not know how to route. Expected "
+                "steer_lane_value or steer_height");
+        }
+    }
+
+    // 3. steer_height is mandatory in both v6 and v7: it is the only source
+    //    of AutoSteerOutput::h_vector. Without it, h_vector would stay
+    //    all-zero while the ego path (xp) was filled correctly, and nothing
+    //    downstream would notice.
+    if (!height_passthrough) {
+        throw std::runtime_error(
+            "[MergedBackend] the contract's passthrough list is missing "
+            "'steer_height'. AutoSteerOutput::h_vector would stay all-zero "
+            "with no error.");
+    }
+
+    // 4. The ego path must be supplied exactly once: either as a v6
+    //    steer_lane_value passthrough, or by the v7 steer_xp rule. With
+    //    neither, xp would stay zero and the vehicle would steer on an empty
+    //    path with no error anywhere.
+    if (!lane_passthrough && !contract.steer_xp) {
+        throw std::runtime_error(
+            "[MergedBackend] the contract supplies no ego path: it has neither "
+            "a 'steer_lane_value' passthrough (v6) nor a 'steer_xp' rule "
+            "(v7). AutoSteer xp would stay zero and lateral fusion would "
+            "steer on an empty path.");
+    }
+    if (lane_passthrough && contract.steer_xp) {
+        throw std::runtime_error(
+            "[MergedBackend] the contract supplies the ego path twice: both a "
+            "'steer_lane_value' passthrough and a 'steer_xp' rule. Exactly "
+            "one is expected.");
+    }
+}
+
+void validate_output_shapes(
+    const MergedContract&                                  contract,
+    const std::unordered_map<std::string, DeclaredOutput>& declared)
+{
+    // Element count of a declared shape, treating dims[0] as a possibly-
+    // symbolic batch axis (excluded) and requiring every other dimension to
+    // be a positive, statically known size. A rank-0 or rank-1 shape has no
+    // batch axis to exclude.
+    const auto trailing_count =
+        [](const std::vector<int64_t>& shape,
+           const std::string& name) -> int64_t {
+        const size_t skip = shape.size() >= 2 ? 1u : 0u;
+        int64_t count = 1;
+        for (size_t i = skip; i < shape.size(); ++i) {
+            if (shape[i] <= 0) {
+                throw std::runtime_error(
+                    "[MergedBackend] output '" + name + "' has a dynamic or "
+                    "unknown dimension in its declared shape; its geometry "
+                    "cannot be verified against the contract at startup");
+            }
+            count *= shape[i];
+        }
+        return count;
+    };
+
+    const auto require_float = [&](const std::string& name) {
+        // validate_contract_names() must run first to guarantee name is a
+        // key here; not re-diagnosed.
+        const auto& d = declared.at(name);
+        if (d.dtype != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            throw std::runtime_error(
+                "[MergedBackend] output '" + name + "' is not float32. Every "
+                "postprocessing path in this backend reads outputs with "
+                "GetTensorData<float>(), which throws on a mismatched "
+                "element type.");
+        }
+    };
+
+    // AutoSteerOutput::xp and h_vector are both fixed (1, 64).
+    constexpr int64_t kFixedVectorSize = 64;
+
+    for (const auto& name : contract.passthrough) {
+        require_float(name);
+        const int64_t count = trailing_count(declared.at(name).shape, name);
+        if (count != kFixedVectorSize) {
+            throw std::runtime_error(
+                "[MergedBackend] passthrough output '" + name + "' has " +
+                std::to_string(count) + " elements but exactly " +
+                std::to_string(kFixedVectorSize) + " are required");
+        }
+    }
+
+    if (contract.head) {
+        const auto& name = contract.head->output;
+        require_float(name);
+        const int64_t count    = trailing_count(declared.at(name).shape, name);
+        const int64_t expected = static_cast<int64_t>(contract.head->map.size());
+        if (count != expected) {
+            throw std::runtime_error(
+                "[MergedBackend] head output '" + name + "' has " +
+                std::to_string(count) + " elements but the contract's "
+                "head.map describes " + std::to_string(expected) + " rows");
+        }
+    }
+
+    if (contract.steer_xp) {
+        const auto& name = contract.steer_xp->logits;
+        require_float(name);
+        const int64_t count = trailing_count(declared.at(name).shape, name);
+        const int64_t expected =
+            static_cast<int64_t>(contract.steer_xp->positions) * kFixedVectorSize;
+        if (count != expected) {
+            throw std::runtime_error(
+                "[MergedBackend] steer_xp logits output '" + name + "' has " +
+                std::to_string(count) + " elements but positions(" +
+                std::to_string(contract.steer_xp->positions) + ")*rows(" +
+                std::to_string(kFixedVectorSize) + ")=" +
+                std::to_string(expected) + " is required");
+        }
+    }
+
+    if (contract.speed) {
+        for (const auto& l : contract.speed->levels) {
+            require_float(l.box);
+            require_float(l.cls);
+
+            const int64_t box_count =
+                trailing_count(declared.at(l.box).shape, l.box);
+            const int64_t expected_box =
+                4LL * static_cast<int64_t>(l.h) * static_cast<int64_t>(l.w);
+            if (box_count != expected_box) {
+                throw std::runtime_error(
+                    "[MergedBackend] speed box output '" + l.box + "' has " +
+                    std::to_string(box_count) + " elements but the "
+                    "contract's hw=[" + std::to_string(l.h) + "," +
+                    std::to_string(l.w) + "] requires 4*h*w=" +
+                    std::to_string(expected_box));
+            }
+
+            const auto& cls_shape = declared.at(l.cls).shape;
+            if (cls_shape.size() < 2) {
+                throw std::runtime_error(
+                    "[MergedBackend] speed cls output '" + l.cls +
+                    "' has rank " + std::to_string(cls_shape.size()) +
+                    ", expected at least 2 to read a class dimension");
+            }
+            // trailing_count() throws first if any dimension from index 1
+            // onward -- including shape[1] itself -- is not a positive,
+            // statically known size, so shape[1] is safe to read afterward.
+            const int64_t cls_count   = trailing_count(cls_shape, l.cls);
+            const int64_t num_classes = cls_shape[1];
+            const int64_t expected_cls =
+                num_classes * static_cast<int64_t>(l.h) * static_cast<int64_t>(l.w);
+            if (cls_count != expected_cls) {
+                throw std::runtime_error(
+                    "[MergedBackend] speed cls output '" + l.cls + "' has " +
+                    std::to_string(cls_count) + " elements but num_classes(" +
+                    std::to_string(num_classes) + ")*h*w=" +
+                    std::to_string(expected_cls) + " is required by the "
+                    "contract's hw=[" + std::to_string(l.h) + "," +
+                    std::to_string(l.w) + "]");
+            }
+        }
+    }
+}
+
+void validate_plain_merged_names(const std::vector<std::string>& output_names)
+{
+    const auto exists = [&](const std::string& name) {
+        for (const auto& n : output_names) {
+            if (n == name) return true;
+        }
+        return false;
+    };
+
+    std::vector<std::string> missing;
+    if (!exists("steer_xp"))       missing.push_back("steer_xp");
+    if (!exists("steer_h_vector")) missing.push_back("steer_h_vector");
+
+    if (!missing.empty()) {
+        std::string msg =
+            "[MergedBackend] plain-merged model is missing output(s) lateral "
+            "fusion depends on.\n  Missing:";
+        for (const auto& m : missing) msg += "\n    " + m;
+        msg += "\n  Session outputs:";
+        for (const auto& n : output_names) msg += "\n    " + n;
+        throw std::runtime_error(msg);
+    }
+}
 
 MergedBackend::MergedBackend(engine::OnnxEngine& engine,
                              const std::string&  model_path,
@@ -93,7 +331,9 @@ MergedBackend::MergedBackend(engine::OnnxEngine& engine,
         printf("[MergedBackend] no contract — plain-merged mode\n");
     }
 
-    // Three inputs are mandatory in both modes.
+    // Three inputs are mandatory in both modes, and no other input is
+    // understood: run() dispatches on exact name and would otherwise refuse
+    // every single frame instead of failing once, here.
     for (const char* required : {"input", "drive_image_prev", "drive_image_curr"}) {
         bool found = false;
         for (const auto& n : in_name_strs_) if (n == required) found = true;
@@ -101,6 +341,14 @@ MergedBackend::MergedBackend(engine::OnnxEngine& engine,
             throw std::runtime_error(
                 std::string("[MergedBackend] merged model is missing required "
                             "input '") + required + "'");
+        }
+    }
+    for (const auto& n : in_name_strs_) {
+        if (n != "input" && n != "drive_image_prev" && n != "drive_image_curr") {
+            throw std::runtime_error(
+                "[MergedBackend] merged model exposes unexpected input '" + n +
+                "'. Expected exactly input, drive_image_prev, "
+                "drive_image_curr");
         }
     }
 
@@ -113,130 +361,31 @@ const Ort::Value* MergedBackend::find_output(const std::string& name) const
 {
     const auto it = out_index_.find(name);
     if (it == out_index_.end()) return nullptr;
+    if (it->second >= results_.size()) return nullptr;
     return &results_[it->second];
 }
 
 void MergedBackend::validate_contract() const
 {
-    if (!contract_) return;
-
-    // 1. Every name the contract mentions must exist in the session. This is
-    //    also what catches a v6 contract paired with a v7 model (which does not
-    //    output steer_lane_value) and the reverse (no steer_silu_41).
-    std::vector<std::string> missing;
-    const auto require = [&](const std::string& name) {
-        if (out_index_.find(name) == out_index_.end()) missing.push_back(name);
-    };
-
-    for (const auto& n : contract_->passthrough) require(n);
-    if (contract_->head)     require(contract_->head->output);
-    if (contract_->steer_xp) require(contract_->steer_xp->logits);
-    if (contract_->speed) {
-        for (const auto& l : contract_->speed->levels) {
-            require(l.box);
-            require(l.cls);
-        }
+    if (!contract_) {
+        validate_plain_merged_names(out_name_strs_);
+        return;
     }
 
-    if (!missing.empty()) {
-        std::string msg =
-            "[MergedBackend] the contract names outputs this session does not "
-            "expose.\n  Missing:";
-        for (const auto& m : missing) msg += "\n    " + m;
-        msg += "\n  Session outputs:";
-        for (const auto& n : out_name_strs_) msg += "\n    " + n;
-        throw std::runtime_error(msg);
-    }
+    validate_contract_names(*contract_, out_name_strs_);
 
-    // 2. The ego path must be supplied exactly once: either as a v6
-    //    steer_lane_value passthrough, or by the v7 steer_xp rule. With
-    //    neither, xp would stay zero and the vehicle would steer on an empty
-    //    path with no error anywhere.
-    bool lane_passthrough = false;
-    for (const auto& n : contract_->passthrough) {
-        if (n == "steer_lane_value") lane_passthrough = true;
+    // Read every output's declared shape/dtype once, then hand the whole map
+    // to the pure geometry check. validate_contract_names() above already
+    // guaranteed every name the contract mentions is a key here.
+    std::unordered_map<std::string, DeclaredOutput> declared;
+    declared.reserve(out_name_strs_.size());
+    for (size_t i = 0; i < out_name_strs_.size(); ++i) {
+        const auto info =
+            session_->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo();
+        declared[out_name_strs_[i]] = DeclaredOutput{info.GetShape(),
+                                                      info.GetElementType()};
     }
-    if (!lane_passthrough && !contract_->steer_xp) {
-        throw std::runtime_error(
-            "[MergedBackend] the contract supplies no ego path: it has neither "
-            "a 'steer_lane_value' passthrough (v6) nor a 'steer_xp' rule "
-            "(v7). AutoSteer xp would stay zero and lateral fusion would "
-            "steer on an empty path.");
-    }
-    if (lane_passthrough && contract_->steer_xp) {
-        throw std::runtime_error(
-            "[MergedBackend] the contract supplies the ego path twice: both a "
-            "'steer_lane_value' passthrough and a 'steer_xp' rule. Exactly "
-            "one is expected.");
-    }
-
-    // 3. Each speed level's box/cls outputs must have the element counts the
-    //    contract's declared hw implies, read from the session's static output
-    //    shapes (no run required). assemble_speed() re-checks this per frame
-    //    against the real tensors (box_count/cls_count) as a defence-in-depth
-    //    guard, but a contract that mis-describes the graph's geometry must
-    //    fail here, at startup, rather than there, on the first frame.
-    if (contract_->speed) {
-        const auto shape_of = [&](const std::string& name) {
-            return session_->GetOutputTypeInfo(out_index_.at(name))
-                .GetTensorTypeAndShapeInfo()
-                .GetShape();
-        };
-        const auto element_count =
-            [&](const std::vector<int64_t>& shape,
-                const std::string& name) -> int64_t {
-            int64_t count = 1;
-            for (const auto d : shape) {
-                if (d <= 0) {
-                    throw std::runtime_error(
-                        "[MergedBackend] speed output '" + name + "' has a "
-                        "dynamic or unknown dimension in its declared shape; "
-                        "its geometry cannot be verified against the "
-                        "contract at startup");
-                }
-                count *= d;
-            }
-            return count;
-        };
-
-        for (const auto& l : contract_->speed->levels) {
-            const auto box_shape = shape_of(l.box);
-            const auto cls_shape = shape_of(l.cls);
-
-            const int64_t box_count = element_count(box_shape, l.box);
-            const int64_t expected_box =
-                4LL * static_cast<int64_t>(l.h) * static_cast<int64_t>(l.w);
-            if (box_count != expected_box) {
-                throw std::runtime_error(
-                    "[MergedBackend] speed box output '" + l.box + "' has " +
-                    std::to_string(box_count) + " elements but the "
-                    "contract's hw=[" + std::to_string(l.h) + "," +
-                    std::to_string(l.w) + "] requires 4*h*w=" +
-                    std::to_string(expected_box));
-            }
-
-            if (cls_shape.size() < 2) {
-                throw std::runtime_error(
-                    "[MergedBackend] speed cls output '" + l.cls +
-                    "' has rank " + std::to_string(cls_shape.size()) +
-                    ", expected at least 2 to read a class dimension");
-            }
-            const int64_t cls_count = element_count(cls_shape, l.cls);
-            const int64_t num_classes = cls_shape[1];
-            const int64_t expected_cls = num_classes *
-                                         static_cast<int64_t>(l.h) *
-                                         static_cast<int64_t>(l.w);
-            if (cls_count != expected_cls) {
-                throw std::runtime_error(
-                    "[MergedBackend] speed cls output '" + l.cls + "' has " +
-                    std::to_string(cls_count) + " elements but num_classes(" +
-                    std::to_string(num_classes) + ")*h*w=" +
-                    std::to_string(expected_cls) + " is required by the "
-                    "contract's hw=[" + std::to_string(l.h) + "," +
-                    std::to_string(l.w) + "]");
-            }
-        }
-    }
+    validate_output_shapes(*contract_, declared);
 }
 
 BackendOutputs MergedBackend::run(const float* prev_imn,
@@ -254,6 +403,8 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
         else if (name == "drive_image_prev") src = prev_imn;
         else if (name == "drive_image_curr") src = curr_imn;
         else {
+            // Unreachable: the constructor refuses any input outside this
+            // set. Kept as a defensive fallback rather than an assert.
             printf("[MergedBackend] Unexpected input '%s'\n", name.c_str());
             return out;
         }
@@ -289,6 +440,8 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
                 if (name == "steer_lane_value")  copy_64(*v, out.steer.xp, name);
                 else if (name == "steer_height") copy_64(*v, out.steer.h_vector, name);
                 else {
+                    // Unreachable: validate_contract_names() refuses any
+                    // other passthrough entry at construction.
                     throw std::runtime_error(
                         "[MergedBackend] unknown passthrough output '" + name +
                         "'. Expected steer_lane_value or steer_height");
@@ -364,13 +517,23 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
             }
         } else {
             // Plain merged: prefixed copies of the original outputs.
+            // out.steer.valid only becomes true when BOTH xp and h_vector
+            // were actually filled -- validate_plain_merged_names() requires
+            // both outputs to exist, but that is a startup guarantee about
+            // names, not proof that copy_64() will not itself throw, so
+            // valid still tracks what really happened this frame.
+            bool xp_ok = false;
+            bool h_vector_ok = false;
             if (const Ort::Value* v = find_output("steer_xp")) {
                 copy_64(*v, out.steer.xp, "steer_xp");
+                xp_ok = true;
             }
             if (const Ort::Value* v = find_output("steer_h_vector")) {
                 copy_64(*v, out.steer.h_vector, "steer_h_vector");
-                out.steer.valid = true;
+                h_vector_ok = true;
             }
+            out.steer.valid = xp_ok && h_vector_ok;
+
             if (const Ort::Value* v = find_output("speed_output")) {
                 const auto shape = v->GetTensorTypeAndShapeInfo().GetShape();
                 if (shape.size() >= 3) {
@@ -397,6 +560,13 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
         // validate_contract(); a shape surprise can still only surface on the
         // first real run. Report and mark the frame invalid rather than
         // aborting mid-drive.
+        printf("[MergedBackend] Postprocessing error: %s\n", e.what());
+        return BackendOutputs{};
+    } catch (const Ort::Exception& e) {
+        // Ort::Exception derives from std::exception, not
+        // std::runtime_error (e.g. GetTensorData<float>() on a
+        // mismatched-dtype tensor), so it needs its own clause to hit the
+        // same per-frame degrade-not-abort behaviour as the catch above.
         printf("[MergedBackend] Postprocessing error: %s\n", e.what());
         return BackendOutputs{};
     }

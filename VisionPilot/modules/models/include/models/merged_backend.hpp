@@ -13,6 +13,59 @@
 
 namespace visionpilot::models {
 
+// An output's declared shape and element type, read from the session without
+// running it (Ort::Session::GetOutputTypeInfo). Lets the structural checks
+// below run either against a real session (the constructor) or a hand-built
+// map (tests), with no ONNX Runtime session required for the latter.
+struct DeclaredOutput {
+    std::vector<int64_t>      shape;
+    ONNXTensorElementDataType dtype = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+};
+
+// Every output name the contract mentions exists in output_names; every
+// passthrough entry is one this backend knows how to route (steer_lane_value
+// or steer_height); steer_height -- the only source of
+// AutoSteerOutput::h_vector -- is present; and the ego path is supplied
+// exactly once, either as a steer_lane_value passthrough (v6) or a steer_xp
+// rule (v7). A pure function of the parsed contract and the session's output
+// name list, so it needs no session and is unit-testable on its own.
+// Throws std::runtime_error naming the problem: the missing/unknown/
+// duplicated output(s), alongside the full session output list where that
+// helps diagnose a v6/v7 mismatch.
+void validate_contract_names(const MergedContract&           contract,
+                             const std::vector<std::string>& output_names);
+
+// Every contract-named output's declared shape and element type agree with
+// what its consumer requires at run time: the speed levels' box/cls geometry
+// (guards assemble_speed()'s box_count/cls_count check before it can ever
+// trip on frame 1), the head tensor's row count (apply_head), the steer_xp
+// logits' row count (apply_steer_xp), and the passthrough tensors' fixed
+// 64-element size (copy_64). Every one of those consumers calls
+// GetTensorData<float>(), which throws Ort::Exception -- not
+// std::runtime_error -- on a non-float tensor, so element type is checked
+// here too.
+//
+// declared must already contain every name the contract mentions; callers
+// run validate_contract_names() first to guarantee that. A shape's leading
+// dimension is treated as a possibly-symbolic batch axis and excluded from
+// the element count; every other dimension must be a positive, statically
+// known size, or the output's geometry cannot be verified here and this
+// throws saying so.
+//
+// Throws std::runtime_error naming the output, what was found, and what was
+// required.
+void validate_output_shapes(
+    const MergedContract&                                  contract,
+    const std::unordered_map<std::string, DeclaredOutput>& declared);
+
+// True when output_names holds the minimum set a plain-merged (no contract)
+// session must expose for lateral fusion to have a real ego path: steer_xp
+// and steer_h_vector. Without both, AutoSteerOutput::valid would end up set
+// from whichever one of the two run() actually finds, reporting a
+// half-filled (or all-zero) frame as good.
+// Throws std::runtime_error naming what is missing.
+void validate_plain_merged_names(const std::vector<std::string>& output_names);
+
 // All three networks in one ONNX Runtime session. Required for the Renesas
 // execution provider, which permits only one NPU session per process.
 //
@@ -67,7 +120,9 @@ private:
     float                         conf_thres_ = 0.6f;
     float                         iou_thres_  = 0.45f;
 
-    // Filled per run so find_output() can resolve by name.
+    // Filled per run so find_output() can resolve by name. A pointer
+    // find_output() returns is invalidated the next time run() reassigns
+    // this.
     std::vector<Ort::Value> results_;
 };
 
