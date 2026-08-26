@@ -433,3 +433,48 @@ TEST(ApplySteerXp, RejectsWrongRowCount)
     EXPECT_THROW(apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out),
                  std::runtime_error);
 }
+
+TEST(ApplySteerXp, RejectsTooManyRows)
+{
+    using visionpilot::models::apply_steer_xp;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    // 65 rows: a valid multiple of positions, but more than the 64
+    // AutoSteerOutput::xp holds.
+    std::vector<float> logits(65 * 256, 0.0f);
+
+    visionpilot::models::AutoSteerOutput out;
+    EXPECT_THROW(apply_steer_xp(*c.steer_xp, logits.data(), logits.size(), out),
+                 std::runtime_error);
+}
+
+TEST(ApplySteerXp, RejectsNonPositivePositions)
+{
+    using visionpilot::models::apply_steer_xp;
+    using visionpilot::models::ContractSteerXp;
+
+    ContractSteerXp rule;
+    rule.logits    = "steer_silu_41";
+    rule.positions = 0;
+    rule.div       = 256.0f;
+
+    std::vector<float> logits(64 * 256, 0.0f);
+    visionpilot::models::AutoSteerOutput out;
+    EXPECT_THROW(apply_steer_xp(rule, logits.data(), logits.size(), out),
+                 std::runtime_error);
+}
+
+TEST(ApplySteerXp, RejectsZeroDiv)
+{
+    using visionpilot::models::apply_steer_xp;
+    using visionpilot::models::ContractSteerXp;
+
+    ContractSteerXp rule;
+    rule.logits    = "steer_silu_41";
+    rule.positions = 256;
+    rule.div       = 0.0f;
+
+    std::vector<float> logits(64 * 256, 0.0f);
+    visionpilot::models::AutoSteerOutput out;
+    EXPECT_THROW(apply_steer_xp(rule, logits.data(), logits.size(), out),
+                 std::runtime_error);
+}

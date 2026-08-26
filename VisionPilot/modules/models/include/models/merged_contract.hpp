@@ -81,10 +81,11 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
 //   xp[r] = softmax(logits[r]) . arange(positions) / div
 //
 // Computed in double precision with row-max subtraction before exponentiating,
-// matching the reference implementation in npu-final-check.py. Sets out.valid.
+// matching openadkit's `npu-final-check.py` reference decoder. Sets out.valid.
 //
-// Throws std::runtime_error when count is not a positive multiple of
-// rule.positions, or when the row count is not AutoSteerOutput::xp's size.
+// Throws std::runtime_error when rule.positions is not positive, when
+// rule.div is zero, when count is not a positive multiple of rule.positions,
+// or when the row count is not AutoSteerOutput::xp's size.
 void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
                     size_t count, AutoSteerOutput& out);
 

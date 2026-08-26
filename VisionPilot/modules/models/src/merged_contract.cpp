@@ -144,6 +144,15 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
 void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
                     size_t count, AutoSteerOutput& out)
 {
+    if (rule.positions <= 0) {
+        throw std::runtime_error(
+            "[MergedContract] steer_xp.positions must be positive, got " +
+            std::to_string(rule.positions));
+    }
+    if (rule.div == 0.f) {
+        throw std::runtime_error("[MergedContract] steer_xp.div is zero");
+    }
+
     const size_t positions = static_cast<size_t>(rule.positions);
 
     if (count == 0 || count % positions != 0) {
