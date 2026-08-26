@@ -90,14 +90,19 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
 void apply_steer_xp(const ContractSteerXp& rule, const float* logits,
                     size_t count, AutoSteerOutput& out);
 
-// One level's raw graph outputs, paired with the geometry the contract declares.
+// One level's raw graph outputs, paired with the geometry the contract
+// declares. h, w and stride come from the contract; box_count, cls_count and
+// num_classes come from the real tensors and let assemble_speed catch a
+// contract that mis-describes what the graph actually emits.
 struct SpeedLevelTensors {
     const float* box = nullptr;  // [1,4,h,w], grid units
     const float* cls = nullptr;  // [1,num_classes,h,w], already sigmoided
-    int h = 0;
-    int w = 0;
-    int stride = 0;
-    int num_classes = 0;
+    int    h           = 0;
+    int    w           = 0;
+    int    stride      = 0;
+    int    num_classes = 0;
+    size_t box_count   = 0;  // element count of box, from the tensor
+    size_t cls_count   = 0;  // element count of cls, from the tensor
 };
 
 // The [1, 4+K, N] detection buffer with layout data[c * N + n], ready for
@@ -110,7 +115,9 @@ struct AssembledSpeed {
 };
 
 // Throws std::runtime_error on an empty level list, a level with a null
-// tensor, or an inconsistent class count across levels.
+// tensor, an inconsistent class count across levels, or a level whose
+// box_count/cls_count disagrees with what h, w and num_classes require —
+// guarding against a contract that mis-describes the graph's real outputs.
 AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels);
 
 // Resolve a contract path. Checks "<model_path>.contract.json" first, then

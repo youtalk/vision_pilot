@@ -497,8 +497,8 @@ TEST(AssembleSpeed, ConcatenatesLevelsAndAppliesStride)
     const float cls_b[2] = {0.5f, 0.6f};
 
     std::vector<SpeedLevelTensors> levels = {
-        {box_a, cls_a, 1, 2, 8,  2},
-        {box_b, cls_b, 1, 1, 16, 2},
+        {box_a, cls_a, 1, 2, 8,  2, 8, 4},
+        {box_b, cls_b, 1, 1, 16, 2, 4, 2},
     };
 
     const auto a = assemble_speed(levels);
@@ -534,9 +534,9 @@ TEST(AssembleSpeed, ProducesV7ShapeWithFourClasses)
     std::vector<float> b2(4 * 16 * 32),  c2(4 * 16 * 32);
 
     std::vector<SpeedLevelTensors> levels = {
-        {b0.data(), c0.data(), 64, 128, 8,  4},
-        {b1.data(), c1.data(), 32, 64,  16, 4},
-        {b2.data(), c2.data(), 16, 32,  32, 4},
+        {b0.data(), c0.data(), 64, 128, 8,  4, b0.size(), c0.size()},
+        {b1.data(), c1.data(), 32, 64,  16, 4, b1.size(), c1.size()},
+        {b2.data(), c2.data(), 16, 32,  32, 4, b2.size(), c2.size()},
     };
 
     const auto a = assemble_speed(levels);
@@ -553,8 +553,8 @@ TEST(AssembleSpeed, RejectsInconsistentClassCount)
     const float box[4] = {0, 0, 0, 0};
     const float cls[2] = {0, 0};
     std::vector<SpeedLevelTensors> levels = {
-        {box, cls, 1, 1, 8,  2},
-        {box, cls, 1, 1, 16, 1},
+        {box, cls, 1, 1, 8,  2, 4, 2},
+        {box, cls, 1, 1, 16, 1, 4, 2},
     };
     EXPECT_THROW(assemble_speed(levels), std::runtime_error);
 }
@@ -565,4 +565,35 @@ TEST(AssembleSpeed, RejectsEmptyLevelList)
     using visionpilot::models::SpeedLevelTensors;
     EXPECT_THROW(assemble_speed(std::vector<SpeedLevelTensors>{}),
                  std::runtime_error);
+}
+
+TEST(AssembleSpeed, RejectsMismatchedBoxCount)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+
+    // h=1, w=2 requires box_count == 4*1*2 == 8; report 7 instead, as if
+    // the contract's declared geometry disagreed with the real tensor.
+    const float box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const float cls[2] = {0, 0};
+    std::vector<SpeedLevelTensors> levels = {
+        {box, cls, 1, 2, 8, 1, /*box_count=*/7, /*cls_count=*/2},
+    };
+    EXPECT_THROW(assemble_speed(levels), std::runtime_error);
+}
+
+TEST(AssembleSpeed, RejectsMismatchedClsCount)
+{
+    using visionpilot::models::assemble_speed;
+    using visionpilot::models::SpeedLevelTensors;
+
+    // h=1, w=2, num_classes=1 requires cls_count == 1*1*2 == 2; report 3
+    // instead, as if the contract's declared geometry disagreed with the
+    // real tensor.
+    const float box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    const float cls[3] = {0, 0, 0};
+    std::vector<SpeedLevelTensors> levels = {
+        {box, cls, 1, 2, 8, 1, /*box_count=*/8, /*cls_count=*/3},
+    };
+    EXPECT_THROW(assemble_speed(levels), std::runtime_error);
 }

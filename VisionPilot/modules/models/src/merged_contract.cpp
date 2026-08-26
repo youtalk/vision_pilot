@@ -222,6 +222,27 @@ AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels)
             throw std::runtime_error(
                 "[MergedContract] speed level has non-positive extent or stride");
         }
+
+        // Guard the buffers against a contract that mis-describes the
+        // graph's real outputs, before either is dereferenced below.
+        const int64_t expected_box =
+            4 * static_cast<int64_t>(l.h) * static_cast<int64_t>(l.w);
+        if (static_cast<int64_t>(l.box_count) != expected_box) {
+            throw std::runtime_error(
+                "[MergedContract] speed level box tensor has " +
+                std::to_string(l.box_count) + " elements but 4*h*w requires " +
+                std::to_string(expected_box));
+        }
+        const int64_t expected_cls = static_cast<int64_t>(num_classes) *
+                                      static_cast<int64_t>(l.h) *
+                                      static_cast<int64_t>(l.w);
+        if (static_cast<int64_t>(l.cls_count) != expected_cls) {
+            throw std::runtime_error(
+                "[MergedContract] speed level cls tensor has " +
+                std::to_string(l.cls_count) + " elements but num_classes*h*w "
+                "requires " + std::to_string(expected_cls));
+        }
+
         total += static_cast<int64_t>(l.h) * l.w;
     }
 
