@@ -324,6 +324,15 @@ TEST(ApplyHead, RejectsShortRawBuffer)
     EXPECT_THROW(apply_head(*c.head, raw, 2, out), std::runtime_error);
 }
 
+TEST(ApplyHead, RejectsLongRawBuffer)
+{
+    using visionpilot::models::apply_head;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    const float raw[4] = {0.f, 0.f, 0.f, 0.f};
+    visionpilot::models::AutoDriveOutput out;
+    EXPECT_THROW(apply_head(*c.head, raw, 4, out), std::runtime_error);
+}
+
 TEST(ApplyHead, RejectsUnknownHeadOutputName)
 {
     using visionpilot::models::apply_head;

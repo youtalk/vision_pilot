@@ -114,10 +114,10 @@ float apply_activation(const std::string& kind, float v)
 void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
                 AutoDriveOutput& out)
 {
-    if (raw_count < head.map.size()) {
+    if (raw_count != head.map.size()) {
         throw std::runtime_error(
             "[MergedContract] head tensor has " + std::to_string(raw_count) +
-            " elements but the contract describes " +
+            " elements but the contract's head.map describes " +
             std::to_string(head.map.size()) + " rows");
     }
 
