@@ -2,6 +2,7 @@
 
 #include <onnxruntime_cxx_api.h>
 
+#include <map>
 #include <memory>
 #include <string>
 
@@ -54,6 +55,18 @@ struct RenesasArtifacts {
 //
 // Throws std::runtime_error naming every missing part.
 RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir);
+
+// Count the nodes each execution provider actually ran, from an ONNX Runtime
+// profile JSON. Only "*_kernel_time" events are counted; fence and session
+// events are not node executions.
+//
+// This is the only API-supported way to observe node placement from C++.
+// Ort::GetAvailableProviders() is global and would report Renesas as available
+// even when every node ran on the CPU.
+//
+// Throws std::runtime_error when the file cannot be read or parsed.
+std::map<std::string, int> parse_profile_providers(
+    const std::string& profile_json_path);
 
 // OnnxEngine owns the ORT environment and carries execution-provider config.
 // Models call create_session() once in their constructor and hold the returned

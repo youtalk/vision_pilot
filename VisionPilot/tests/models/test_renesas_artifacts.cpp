@@ -10,6 +10,7 @@
 namespace fs = std::filesystem;
 using visionpilot::engine::Config;
 using visionpilot::engine::OnnxEngine;
+using visionpilot::engine::parse_profile_providers;
 using visionpilot::engine::resolve_renesas_artifacts;
 
 namespace {
@@ -195,6 +196,87 @@ TEST_F(ArtifactsDir, RejectsArtifactsDirThatIsARegularFile)
     const auto file = root_ / "not_a_directory";
     touch(file);
     EXPECT_THROW(resolve_renesas_artifacts(file.string()), std::runtime_error);
+}
+
+// ─── NPU offload profile parsing ─────────────────────────────────────────────
+
+TEST_F(ArtifactsDir, CountsProvidersFromProfileJson)
+{
+    const auto p = root_ / "profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"([
+      {"cat":"Session","name":"model_run","dur":1000},
+      {"cat":"Node","name":"Conv_1_kernel_time","dur":10,
+       "args":{"provider":"RenesasExecutionProvider"}},
+      {"cat":"Node","name":"Conv_2_kernel_time","dur":12,
+       "args":{"provider":"RenesasExecutionProvider"}},
+      {"cat":"Node","name":"Tanh_1_kernel_time","dur":1,
+       "args":{"provider":"CPUExecutionProvider"}},
+      {"cat":"Node","name":"Conv_1_fence_before","dur":0,
+       "args":{"provider":"RenesasExecutionProvider"}}
+    ])";
+
+    const auto hist = parse_profile_providers(p.string());
+    EXPECT_EQ(hist.at("RenesasExecutionProvider"), 2);
+    EXPECT_EQ(hist.at("CPUExecutionProvider"), 1);
+    // Non-kernel_time events must not be counted.
+    EXPECT_EQ(hist.size(), 2u);
+}
+
+TEST_F(ArtifactsDir, ProfileWithNoNodeEventsIsEmpty)
+{
+    const auto p = root_ / "empty_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"([{"cat":"Session","name":"model_run","dur":1}])";
+    EXPECT_TRUE(parse_profile_providers(p.string()).empty());
+}
+
+TEST_F(ArtifactsDir, MissingProfileThrows)
+{
+    EXPECT_THROW(parse_profile_providers((root_ / "nope.json").string()),
+                 std::runtime_error);
+}
+
+TEST_F(ArtifactsDir, EmptyProfilePathThrows)
+{
+    EXPECT_THROW(parse_profile_providers(""), std::runtime_error);
+}
+
+TEST_F(ArtifactsDir, MalformedProfileJsonThrows)
+{
+    const auto p = root_ / "malformed_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"({"cat": "Node", "name": )";  // truncated, invalid JSON
+
+    EXPECT_THROW(parse_profile_providers(p.string()), std::runtime_error);
+}
+
+TEST_F(ArtifactsDir, NonArrayProfileJsonIsEmpty)
+{
+    // Valid JSON, but not the array of events ORT emits. Treated as "no node
+    // events found" rather than an error: the offload gate itself is what
+    // must refuse an empty histogram, not this parser.
+    const auto p = root_ / "object_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"({"not": "an array"})";
+
+    EXPECT_TRUE(parse_profile_providers(p.string()).empty());
+}
+
+TEST_F(ArtifactsDir, KernelTimeEventMissingArgsOrProviderIsSkipped)
+{
+    const auto p = root_ / "missing_fields_profile.json";
+    fs::create_directories(root_);
+    std::ofstream(p) << R"([
+      {"cat":"Node","name":"Conv_1_kernel_time","dur":10},
+      {"cat":"Node","name":"Conv_2_kernel_time","dur":10,"args":{}},
+      {"cat":"Node","name":"Conv_3_kernel_time","dur":10,
+       "args":{"provider":"RenesasExecutionProvider"}}
+    ])";
+
+    const auto hist = parse_profile_providers(p.string());
+    EXPECT_EQ(hist.at("RenesasExecutionProvider"), 1);
+    EXPECT_EQ(hist.size(), 1u);
 }
 
 // ─── OnnxEngine-level guards ─────────────────────────────────────────────────

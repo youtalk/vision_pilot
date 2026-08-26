@@ -580,4 +580,42 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
     return out;
 }
 
+void MergedBackend::verify_offload(const float* prev_imn,
+                                   const float* curr_imn,
+                                   const float* curr_01)
+{
+    if (provider_ != "renesas") return;
+
+    printf("[MergedBackend] Offload gate: running one warm-up frame\n");
+    (void)run(prev_imn, curr_imn, curr_01);
+
+    Ort::AllocatorWithDefaultOptions alloc;
+    const auto profile = session_->EndProfilingAllocated(alloc);
+    const std::string profile_path = profile.get();
+
+    const auto hist = engine::parse_profile_providers(profile_path);
+
+    printf("[MergedBackend] Node placement:\n");
+    int npu_nodes = 0;
+    for (const auto& [prov, n] : hist) {
+        printf("             %-32s %d\n", prov.c_str(), n);
+        if (prov == "RenesasExecutionProvider") npu_nodes = n;
+    }
+
+    const int required = require_npu_nodes_ > 0 ? require_npu_nodes_ : 1;
+    if (npu_nodes < required) {
+        throw std::runtime_error(
+            "[MergedBackend] NPU offload gate FAILED: " +
+            std::to_string(npu_nodes) + " nodes on RenesasExecutionProvider, "
+            "required at least " + std::to_string(required) +
+            ". The CPU execution provider is a silent fallback, so a run that "
+            "completes is not proof of offload. Check that the artifacts match "
+            "this model and that their recorded compile-host paths are "
+            "mounted. Profile: " + profile_path);
+    }
+
+    printf("[MergedBackend] Offload gate PASSED — %d nodes on the NPU\n",
+           npu_nodes);
+}
+
 }  // namespace visionpilot::models

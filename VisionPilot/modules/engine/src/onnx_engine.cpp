@@ -1,8 +1,12 @@
 #include "engine/onnx_engine.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -109,6 +113,47 @@ RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir)
     a.base         = dir.parent_path().string();
     a.qdq_inserted = qdq;
     return a;
+}
+
+// ─── NPU offload profile parsing ─────────────────────────────────────────────
+
+std::map<std::string, int> parse_profile_providers(
+    const std::string& profile_json_path)
+{
+    std::ifstream in(profile_json_path);
+    if (!in) {
+        throw std::runtime_error(
+            "[OnnxEngine] cannot open profile " + profile_json_path);
+    }
+
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const nlohmann::json::exception& e) {
+        throw std::runtime_error(
+            std::string("[OnnxEngine] malformed profile JSON: ") + e.what());
+    }
+
+    std::map<std::string, int> hist;
+    if (!j.is_array()) return hist;
+
+    for (const auto& ev : j) {
+        if (!ev.is_object() || !ev.contains("name")) continue;
+        const auto name = ev["name"].get<std::string>();
+
+        static const std::string kSuffix = "_kernel_time";
+        if (name.size() <= kSuffix.size() ||
+            name.compare(name.size() - kSuffix.size(), kSuffix.size(),
+                         kSuffix) != 0) {
+            continue;
+        }
+        if (!ev.contains("args") || !ev["args"].is_object()) continue;
+        const auto& args = ev["args"];
+        if (!args.contains("provider")) continue;
+
+        ++hist[args["provider"].get<std::string>()];
+    }
+    return hist;
 }
 
 // ─── Public entry point ───────────────────────────────────────────────────────
