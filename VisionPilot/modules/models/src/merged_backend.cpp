@@ -119,6 +119,41 @@ void validate_contract_names(const MergedContract&           contract,
             "'steer_lane_value' passthrough and a 'steer_xp' rule. Exactly "
             "one is expected.");
     }
+
+    // 5. A session exposing the rewritten drive head can only produce
+    //    AutoDrive's outputs through a head rule. Without one, run() leaves
+    //    out.drive default-constructed on every frame with no message at all,
+    //    and longitudinal fusion reads a permanently invalid drive output as
+    //    "no CIPO confirmed" -- a clear road at D_MAX -- rather than as an
+    //    error. Both v6 and v7 contracts carry a head rule, so only a
+    //    truncated or mis-staged contract can reach this.
+    if (!contract.head) {
+        for (const auto& n : output_names) {
+            if (is_drive_head_raw_output(n)) {
+                throw std::runtime_error(
+                    "[MergedBackend] the session exposes '" + n + "' but the "
+                    "contract has no 'head' rule. AutoDriveOutput would stay "
+                    "default-constructed (valid=false) on every frame with no "
+                    "error, which longitudinal fusion reads as a clear road. "
+                    "A rewritten (v6/v7) contract must supply 'head'.");
+            }
+        }
+    }
+
+    // 6. Likewise for the per-level speed tail: without a speed rule the
+    //    detections would stay empty on every frame, silently.
+    if (!contract.speed) {
+        for (const auto& n : output_names) {
+            if (is_speed_level_box_output(n)) {
+                throw std::runtime_error(
+                    "[MergedBackend] the session exposes '" + n + "' but the "
+                    "contract has no 'speed' rule. AutoSpeedOutput would stay "
+                    "default-constructed (no detections) on every frame with "
+                    "no error, which longitudinal fusion reads as a clear "
+                    "road. A rewritten (v6/v7) contract must supply 'speed'.");
+            }
+        }
+    }
 }
 
 void validate_output_shapes(
@@ -203,6 +238,12 @@ void validate_output_shapes(
     }
 
     if (contract.speed) {
+        // The class dimension of the first level, carried across the loop.
+        // assemble_speed() also refuses levels that disagree, but only once a
+        // frame has been run; caught here it is a startup refusal instead.
+        int64_t     first_num_classes = 0;
+        std::string first_cls_name;
+
         for (const auto& l : contract.speed->levels) {
             require_float(l.box);
             require_float(l.cls);
@@ -243,6 +284,20 @@ void validate_output_shapes(
                     "contract's hw=[" + std::to_string(l.h) + "," +
                     std::to_string(l.w) + "]");
             }
+
+            if (first_cls_name.empty()) {
+                first_num_classes = num_classes;
+                first_cls_name    = l.cls;
+            } else if (num_classes != first_num_classes) {
+                throw std::runtime_error(
+                    "[MergedBackend] speed cls output '" + l.cls +
+                    "' declares " + std::to_string(num_classes) +
+                    " classes but '" + first_cls_name + "' declares " +
+                    std::to_string(first_num_classes) +
+                    ". Every speed level must agree on the class count, "
+                    "because they are concatenated into one [1,4+K,N] "
+                    "detection buffer.");
+            }
         }
     }
 }
@@ -256,14 +311,24 @@ void validate_plain_merged_names(const std::vector<std::string>& output_names)
         return false;
     };
 
+    // Every name run()'s plain-merged branch resolves with find_output().
+    // find_output() returns nullptr for an absent name and the branch then
+    // skips that output silently, so all six are required here: the two steer
+    // outputs lateral fusion needs, and the four drive/speed outputs whose
+    // absence would leave AutoDrive and AutoSpeed permanently invalid -- which
+    // longitudinal fusion reads as a clear road, not as an error.
     std::vector<std::string> missing;
-    if (!exists("steer_xp"))       missing.push_back("steer_xp");
-    if (!exists("steer_h_vector")) missing.push_back("steer_h_vector");
+    if (!exists("steer_xp"))         missing.push_back("steer_xp");
+    if (!exists("steer_h_vector"))   missing.push_back("steer_h_vector");
+    if (!exists("drive_distance"))   missing.push_back("drive_distance");
+    if (!exists("drive_curvature"))  missing.push_back("drive_curvature");
+    if (!exists("drive_flag_logit")) missing.push_back("drive_flag_logit");
+    if (!exists("speed_output"))     missing.push_back("speed_output");
 
     if (!missing.empty()) {
         std::string msg =
-            "[MergedBackend] plain-merged model is missing output(s) lateral "
-            "fusion depends on.\n  Missing:";
+            "[MergedBackend] plain-merged model is missing output(s) this "
+            "backend depends on.\n  Missing:";
         for (const auto& m : missing) msg += "\n    " + m;
         msg += "\n  Session outputs:";
         for (const auto& n : output_names) msg += "\n    " + n;
@@ -632,16 +697,18 @@ void MergedBackend::verify_offload(const float* prev_imn,
     const std::string profile_path = profile.get();
 
     if (probe.ad_ms <= 0.0) {
-        // run() catches its own inference errors, prints them, and returns
-        // a default-constructed BackendOutputs -- ad_ms is set only after
-        // session_->Run() itself succeeds. Without this check, a probe that
-        // never actually ran would fall straight into an empty-histogram
-        // "the NPU did no work" verdict, misreporting an inference failure
-        // as an offload failure.
+        // run() catches its own errors, prints them, and returns a
+        // default-constructed BackendOutputs: ad_ms is set only after
+        // session_->Run() itself succeeds, and a postprocessing failure
+        // discards it again by returning BackendOutputs{}. Without this
+        // check, a probe that did not complete would fall straight into an
+        // empty-histogram "the NPU did no work" verdict, misreporting an
+        // inference or postprocessing failure as an offload failure.
         throw std::runtime_error(
             "[MergedBackend] NPU offload gate FAILED: the probe run did not "
-            "complete (see the inference error printed above), so no "
-            "profile can be trusted to prove or disprove NPU offload. "
+            "complete (see the inference or postprocessing error printed "
+            "above), so no profile can be trusted to prove or disprove NPU "
+            "offload. "
             "Profile: " + profile_path);
     }
 

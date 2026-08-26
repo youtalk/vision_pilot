@@ -187,6 +187,28 @@ TEST(MergedContract, DetectsRewriteSignatureOutputs)
         {"steer_xp", "speed_output", "drive_distance"}));
 }
 
+TEST(MergedContract, SplitsRewriteSignatureIntoDriveAndSpeedHalves)
+{
+    using visionpilot::models::is_drive_head_raw_output;
+    using visionpilot::models::is_speed_level_box_output;
+
+    // The two halves answer independently: the drive marker is not a speed
+    // marker and vice versa, which is what lets validate_contract_names()
+    // demand a head rule and a speed rule separately.
+    EXPECT_TRUE(is_drive_head_raw_output("drive_head_raw"));
+    EXPECT_FALSE(is_speed_level_box_output("drive_head_raw"));
+
+    EXPECT_TRUE(is_speed_level_box_output("speed_l15_box"));
+    EXPECT_TRUE(is_speed_level_box_output("speed_l17_box"));
+    EXPECT_FALSE(is_drive_head_raw_output("speed_l15_box"));
+
+    // Neither marker: the plain-merged output names and the cls half of a
+    // rewritten speed level.
+    EXPECT_FALSE(is_speed_level_box_output("speed_l15_cls"));
+    EXPECT_FALSE(is_speed_level_box_output("speed_output"));
+    EXPECT_FALSE(is_drive_head_raw_output("drive_distance"));
+}
+
 TEST(ResolveContractPath, PrefersSidecarWhenOnlySidecarExists)
 {
     ScopedTempDir dir;
@@ -338,13 +360,61 @@ TEST(ApplyHead, RejectsLongRawBuffer)
 TEST(ApplyHead, RejectsUnknownHeadOutputName)
 {
     using visionpilot::models::apply_head;
-    const auto c = MergedContract::from_json_string(R"({
-      "head": {"output": "drive_head_raw", "alpha": [1.0],
-               "map": [["drive_mystery", "relu"]]}
-    })");
+    using visionpilot::models::ContractHead;
+
+    // Built by hand rather than parsed: parse_head() now refuses an unknown
+    // destination at startup, so this row can no longer come through the
+    // parser. apply_head()'s own check survives as the defensive fallback for
+    // a hand-built ContractHead, and this test keeps it honest.
+    ContractHead head;
+    head.output = "drive_head_raw";
+    head.alpha  = {1.0f};
+    head.map    = {{"drive_mystery", "relu"}};
+
     const float raw[1] = {1.0f};
     visionpilot::models::AutoDriveOutput out;
-    EXPECT_THROW(apply_head(*c.head, raw, 1, out), std::runtime_error);
+    try {
+        apply_head(head, raw, 1, out);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("unknown head output 'drive_mystery'"),
+                  std::string::npos) << msg;
+    }
+}
+
+TEST(MergedContract, RejectsUnknownHeadMapOutputAtParseTime)
+{
+    // A one-character typo in contract.json must be one startup refusal
+    // naming the bad row, not an apply_head() throw at frame rate.
+    try {
+        MergedContract::from_json_string(R"({
+          "head": {"output": "drive_head_raw", "alpha": [1.0],
+                   "map": [["drive_mystery", "relu"]]}
+        })");
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("head.map names unknown output 'drive_mystery'"),
+                  std::string::npos) << msg;
+        // The activation is valid; only the destination is wrong, so the
+        // activation guard must not be the one that fired.
+        EXPECT_EQ(msg.find("unknown activation"), std::string::npos) << msg;
+    }
+}
+
+TEST(MergedContract, AcceptsEveryValidHeadMapDestination)
+{
+    // The guard above must refuse none of the three real destinations, in
+    // any order.
+    const auto c = MergedContract::from_json_string(R"({
+      "head": {"output": "drive_head_raw", "alpha": [1.0, 2.0, 3.0],
+               "map": [["drive_flag_logit", "none"],
+                       ["drive_curvature", "tanh"],
+                       ["drive_distance", "relu"]]}
+    })");
+    ASSERT_TRUE(c.head.has_value());
+    EXPECT_EQ(c.head->map.size(), 3u);
 }
 
 TEST(ApplySteerXp, UniformLogitsGiveMeanPosition)

@@ -31,6 +31,16 @@ ContractHead parse_head(const nlohmann::json& j)
                 "[MergedContract] unknown activation '" + m.activation +
                 "' for head output '" + m.output + "'");
         }
+        // The destination is validated here, beside the activation, so a typo
+        // in contract.json is one startup refusal naming the bad row rather
+        // than an apply_head() throw on every single frame.
+        if (m.output != "drive_distance" && m.output != "drive_curvature" &&
+            m.output != "drive_flag_logit") {
+            throw std::runtime_error(
+                "[MergedContract] head.map names unknown output '" + m.output +
+                "'. Expected drive_distance, drive_curvature, or "
+                "drive_flag_logit");
+        }
         h.map.push_back(std::move(m));
     }
 
@@ -132,6 +142,9 @@ void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
         } else if (m.output == "drive_flag_logit") {
             out.flag_prob = 1.f / (1.f + std::exp(-v));
         } else {
+            // Unreachable through the parser: parse_head() refuses any other
+            // destination name at startup. Kept as a defensive fallback for a
+            // ContractHead built by hand rather than parsed.
             throw std::runtime_error(
                 "[MergedContract] unknown head output '" + m.output +
                 "'. Expected drive_distance, drive_curvature, or "
@@ -331,13 +344,22 @@ std::string resolve_contract_path(const std::string& model_path,
     return {};
 }
 
+bool is_drive_head_raw_output(const std::string& name)
+{
+    return name == "drive_head_raw";
+}
+
+bool is_speed_level_box_output(const std::string& name)
+{
+    // speed_l<N>_box exists only after the R7 per-level DFL rewrite.
+    return name.rfind("speed_l", 0) == 0 &&
+           name.size() > 4 && name.compare(name.size() - 4, 4, "_box") == 0;
+}
+
 bool has_rewrite_signature_output(const std::vector<std::string>& output_names)
 {
     for (const auto& n : output_names) {
-        if (n == "drive_head_raw") return true;
-        // speed_l<N>_box exists only after the R7 per-level DFL rewrite.
-        if (n.rfind("speed_l", 0) == 0 &&
-            n.size() > 4 && n.compare(n.size() - 4, 4, "_box") == 0) {
+        if (is_drive_head_raw_output(n) || is_speed_level_box_output(n)) {
             return true;
         }
     }

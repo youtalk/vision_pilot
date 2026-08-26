@@ -70,6 +70,49 @@ bool contains(const std::string& haystack, const std::string& needle)
     return haystack.find(needle) != std::string::npos;
 }
 
+// Every output run()'s plain-merged branch resolves with find_output().
+const std::vector<std::string> kPlainMergedOutputs = {
+    "steer_xp",       "steer_h_vector",   "drive_distance",
+    "drive_curvature", "drive_flag_logit", "speed_output"};
+
+// kPlainMergedOutputs with one name removed, so each test isolates exactly
+// one missing output.
+std::vector<std::string> plain_merged_without(const std::string& drop)
+{
+    std::vector<std::string> out;
+    for (const auto& n : kPlainMergedOutputs) {
+        if (n != drop) out.push_back(n);
+    }
+    return out;
+}
+
+// The exact contents of the message's "Missing:" section, so a test can
+// assert both which name was reported and that no other was.
+std::string missing_section(const std::string& msg)
+{
+    const std::string head = "Missing:";
+    const std::string tail = "\n  Session outputs:";
+    const size_t      b    = msg.find(head);
+    if (b == std::string::npos) return "<no Missing: section>";
+    const size_t start = b + head.size();
+    const size_t end   = msg.find(tail, start);
+    if (end == std::string::npos) return "<no Session outputs: section>";
+    return msg.substr(start, end - start);
+}
+
+// Assert that validate_plain_merged_names() refuses `outputs` naming exactly
+// `missing` -- and nothing else -- as the missing output.
+void expect_only_missing(const std::vector<std::string>& outputs,
+                         const std::string&              missing)
+{
+    try {
+        validate_plain_merged_names(outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        EXPECT_EQ(missing_section(e.what()), "\n    " + missing) << e.what();
+    }
+}
+
 }  // namespace
 
 // ─── validate_contract_names ────────────────────────────────────────────────
@@ -204,6 +247,85 @@ TEST(ValidateContractNames, RejectsUnroutablePassthroughEntry)
     }
 }
 
+// A contract.json truncated to the steering rules alone parses cleanly and
+// satisfies every steering check, but leaves run() with nothing to fill
+// AutoDrive and AutoSpeed from. Longitudinal fusion reads a permanently
+// invalid drive and speed pair as a confirmed clear road at D_MAX, not as an
+// error, so the rules must be required against a session that exposes the
+// rewritten outputs.
+
+TEST(ValidateContractNames, RejectsContractWithNoHeadRuleAgainstRewrittenModel)
+{
+    // Steering is complete (v6 shape) and a speed rule is present, so only
+    // the missing head rule can fire here.
+    const char* json = R"({
+     "passthrough": ["steer_lane_value", "steer_height"],
+     "speed": {"levels": [
+        {"box": "speed_l15_box", "cls": "speed_l15_cls", "stride": 8, "hw": [64, 128]}
+     ]}
+    })";
+    const auto c = MergedContract::from_json_string(json);
+    try {
+        validate_contract_names(c, kV6Outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "'drive_head_raw'")) << msg;
+        EXPECT_TRUE(contains(msg, "no 'head' rule")) << msg;
+        // The speed rule is present, and every contract-named output exists.
+        EXPECT_FALSE(contains(msg, "no 'speed' rule")) << msg;
+        EXPECT_FALSE(contains(msg, "Missing:")) << msg;
+    }
+}
+
+TEST(ValidateContractNames, RejectsContractWithNoSpeedRuleAgainstRewrittenModel)
+{
+    // Steering and the head rule are complete, so only the missing speed
+    // rule can fire here.
+    const char* json = R"({
+     "passthrough": ["steer_lane_value", "steer_height"],
+     "head": {
+      "output": "drive_head_raw",
+      "alpha": [8.0, 512.0, 0.5],
+      "map": [["drive_distance", "relu"],
+              ["drive_curvature", "tanh"],
+              ["drive_flag_logit", "none"]]
+     }
+    })";
+    const auto c = MergedContract::from_json_string(json);
+    try {
+        validate_contract_names(c, kV6Outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "'speed_l15_box'")) << msg;
+        EXPECT_TRUE(contains(msg, "no 'speed' rule")) << msg;
+        EXPECT_FALSE(contains(msg, "no 'head' rule")) << msg;
+        EXPECT_FALSE(contains(msg, "Missing:")) << msg;
+    }
+}
+
+TEST(ValidateContractNames, RejectsTruncatedSteeringOnlyContract)
+{
+    // The exact failure the guards exist for: a contract.json truncated to
+    // its passthrough list, against a real v7 artifact set.
+    const char* json = R"({"passthrough": ["steer_lane_value", "steer_height"]})";
+    const auto  c    = MergedContract::from_json_string(json);
+    EXPECT_THROW(validate_contract_names(c, kV6Outputs), std::runtime_error);
+}
+
+TEST(ValidateContractNames, AcceptsNoHeadOrSpeedRuleOnANonRewrittenSession)
+{
+    // A session exposing neither marker is not a rewritten artifact set, so
+    // neither rule may be demanded of its contract. This is what keeps the
+    // two new guards from firing on anything but v6/v7 outputs.
+    const char* json = R"({"passthrough": ["steer_lane_value", "steer_height"]})";
+    const auto  c    = MergedContract::from_json_string(json);
+    const std::vector<std::string> outputs = {
+        "steer_lane_value", "steer_height", "speed_l15_cls", "speed_output"};
+    EXPECT_NO_THROW(validate_contract_names(c, outputs));
+}
+
 // ─── validate_output_shapes ─────────────────────────────────────────────────
 
 TEST(ValidateOutputShapes, AcceptsMatchingSpeedGeometry)
@@ -253,6 +375,76 @@ TEST(ValidateOutputShapes, RejectsSpeedGeometryMismatch)
         EXPECT_TRUE(contains(msg, "10240"));
         EXPECT_TRUE(contains(msg, "40960"));
         EXPECT_FALSE(contains(msg, "speed box output"));
+    }
+}
+
+TEST(ValidateOutputShapes, AcceptsAgreeingClassCountsAcrossLevels)
+{
+    // The real v7 geometry: three levels, all K = 4. The cross-level check
+    // must not refuse it.
+    const char* json = R"({
+     "speed": {"levels": [
+        {"box": "speed_l15_box", "cls": "speed_l15_cls", "stride": 8,  "hw": [64, 128]},
+        {"box": "speed_l16_box", "cls": "speed_l16_cls", "stride": 16, "hw": [32, 64]},
+        {"box": "speed_l17_box", "cls": "speed_l17_cls", "stride": 32, "hw": [16, 32]}
+     ]}
+    })";
+    const auto c = MergedContract::from_json_string(json);
+
+    std::unordered_map<std::string, DeclaredOutput> declared;
+    declared["speed_l15_box"] =
+        DeclaredOutput{{1, 4, 64, 128}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l15_cls"] =
+        DeclaredOutput{{1, 4, 64, 128}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l16_box"] =
+        DeclaredOutput{{1, 4, 32, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l16_cls"] =
+        DeclaredOutput{{1, 4, 32, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l17_box"] =
+        DeclaredOutput{{1, 4, 16, 32}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l17_cls"] =
+        DeclaredOutput{{1, 4, 16, 32}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+
+    EXPECT_NO_THROW(validate_output_shapes(c, declared));
+}
+
+TEST(ValidateOutputShapes, RejectsClassCountDisagreementAcrossLevels)
+{
+    // Each level is internally consistent -- cls_count == num_classes*h*w on
+    // both -- so only the cross-level comparison can catch this. Without it,
+    // assemble_speed()'s "speed levels disagree on class count" throw would
+    // be a frame-1 diagnosis instead of a startup refusal.
+    const char* json = R"({
+     "speed": {"levels": [
+        {"box": "speed_l15_box", "cls": "speed_l15_cls", "stride": 8,  "hw": [64, 128]},
+        {"box": "speed_l16_box", "cls": "speed_l16_cls", "stride": 16, "hw": [32, 64]}
+     ]}
+    })";
+    const auto c = MergedContract::from_json_string(json);
+
+    std::unordered_map<std::string, DeclaredOutput> declared;
+    declared["speed_l15_box"] =
+        DeclaredOutput{{1, 4, 64, 128}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l15_cls"] =
+        DeclaredOutput{{1, 4, 64, 128}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    declared["speed_l16_box"] =
+        DeclaredOutput{{1, 4, 32, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+    // 3 classes here, 4 on l15.
+    declared["speed_l16_cls"] =
+        DeclaredOutput{{1, 3, 32, 64}, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT};
+
+    try {
+        validate_output_shapes(c, declared);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "must agree on the class count")) << msg;
+        EXPECT_TRUE(contains(msg, "'speed_l16_cls' declares 3")) << msg;
+        EXPECT_TRUE(contains(msg, "'speed_l15_cls' declares 4")) << msg;
+        // Both levels' own box/cls geometry is self-consistent; neither
+        // per-level guard may be the one that fired.
+        EXPECT_FALSE(contains(msg, "elements but num_classes(")) << msg;
+        EXPECT_FALSE(contains(msg, "speed box output")) << msg;
     }
 }
 
@@ -375,25 +567,63 @@ TEST(ValidateOutputShapes, RejectsSteerXpRowCountMismatch)
 
 TEST(ValidatePlainMergedNames, AcceptsCompleteOutputList)
 {
-    EXPECT_NO_THROW(validate_plain_merged_names(
-        {"steer_xp", "steer_h_vector", "speed_output"}));
+    EXPECT_NO_THROW(validate_plain_merged_names(kPlainMergedOutputs));
 }
 
 TEST(ValidatePlainMergedNames, RejectsMissingSteerHVector)
 {
-    EXPECT_THROW(validate_plain_merged_names({"steer_xp", "speed_output"}),
-                std::runtime_error);
+    expect_only_missing(plain_merged_without("steer_h_vector"),
+                        "steer_h_vector");
 }
 
 TEST(ValidatePlainMergedNames, RejectsMissingSteerXp)
 {
-    EXPECT_THROW(
-        validate_plain_merged_names({"steer_h_vector", "speed_output"}),
-        std::runtime_error);
+    expect_only_missing(plain_merged_without("steer_xp"), "steer_xp");
 }
 
-TEST(ValidatePlainMergedNames, RejectsBothMissing)
+// run()'s plain-merged branch resolves each of the four names below with
+// find_output(), which returns nullptr for an absent name and leaves the
+// corresponding output default-constructed on every frame with no message.
+// A permanently invalid drive and speed output is what longitudinal fusion
+// reads as a confirmed clear road, so all four must fail at startup.
+
+TEST(ValidatePlainMergedNames, RejectsMissingDriveDistance)
 {
-    EXPECT_THROW(validate_plain_merged_names({"speed_output"}),
-                std::runtime_error);
+    expect_only_missing(plain_merged_without("drive_distance"),
+                        "drive_distance");
+}
+
+TEST(ValidatePlainMergedNames, RejectsMissingDriveCurvature)
+{
+    expect_only_missing(plain_merged_without("drive_curvature"),
+                        "drive_curvature");
+}
+
+TEST(ValidatePlainMergedNames, RejectsMissingDriveFlagLogit)
+{
+    expect_only_missing(plain_merged_without("drive_flag_logit"),
+                        "drive_flag_logit");
+}
+
+TEST(ValidatePlainMergedNames, RejectsMissingSpeedOutput)
+{
+    expect_only_missing(plain_merged_without("speed_output"), "speed_output");
+}
+
+TEST(ValidatePlainMergedNames, ReportsEveryMissingNameAtOnce)
+{
+    try {
+        validate_plain_merged_names({"steer_xp"});
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_EQ(missing_section(msg),
+                  "\n    steer_h_vector"
+                  "\n    drive_distance"
+                  "\n    drive_curvature"
+                  "\n    drive_flag_logit"
+                  "\n    speed_output") << msg;
+        // The session's actual outputs are still listed alongside.
+        EXPECT_TRUE(contains(msg, "Session outputs:\n    steer_xp")) << msg;
+    }
 }

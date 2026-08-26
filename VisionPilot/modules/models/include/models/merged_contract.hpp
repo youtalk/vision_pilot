@@ -1,7 +1,6 @@
 #pragma once
 
 #include <models/auto_drive.hpp>
-#include <models/auto_speed.hpp>
 #include <models/auto_steer.hpp>
 
 #include <cstddef>
@@ -71,8 +70,11 @@ struct MergedContract {
 // alpha[i], apply map[i].activation, and store into the field named by
 // map[i].output. The "drive_flag_logit" row is passed through sigmoid, matching
 // what the split path does in auto_drive.cpp.
-// Throws std::runtime_error when raw_count is smaller than the contract's row
-// count or when a row names an unknown output.
+// Throws std::runtime_error when raw_count is not equal to the contract's row
+// count or when a row names an unknown output. The unknown-output branch is
+// unreachable for a parsed contract -- MergedContract::from_json_string()
+// refuses an unknown destination name at startup -- and remains only as a
+// defensive fallback for a hand-built ContractHead.
 void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
                 AutoDriveOutput& out);
 
@@ -125,6 +127,16 @@ AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels);
 // Either argument may be empty.
 std::string resolve_contract_path(const std::string& model_path,
                                   const std::string& artifacts_dir);
+
+// True when name is the fused drive head R6 emits ([1,3,1,1], one row per
+// drive output). A session exposing it can only produce AutoDrive's outputs
+// through the contract's head rule.
+bool is_drive_head_raw_output(const std::string& name);
+
+// True when name is one of the per-level speed box outputs R7 emits
+// (speed_l<N>_box). A session exposing one can only produce AutoSpeed's
+// detections through the contract's speed rule.
+bool is_speed_level_box_output(const std::string& name);
 
 // True when the session exposes an output that only exists after the NPU-legal
 // rewrite and therefore cannot be interpreted without a contract. Loading such

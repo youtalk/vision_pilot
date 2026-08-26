@@ -26,9 +26,13 @@ struct DeclaredOutput {
 // Every output name the contract mentions exists in output_names; every
 // passthrough entry is one this backend knows how to route (steer_lane_value
 // or steer_height); steer_height -- the only source of
-// AutoSteerOutput::h_vector -- is present; and the ego path is supplied
-// exactly once, either as a steer_lane_value passthrough (v6) or a steer_xp
-// rule (v7). A pure function of the parsed contract and the session's output
+// AutoSteerOutput::h_vector -- is present; the ego path is supplied exactly
+// once, either as a steer_lane_value passthrough (v6) or a steer_xp rule
+// (v7); and no rewritten output is left unhandled -- a session exposing
+// drive_head_raw requires a head rule, and one exposing any speed_l<N>_box
+// requires a speed rule, without which AutoDrive/AutoSpeed would stay
+// permanently invalid and longitudinal fusion would read that as a clear
+// road. A pure function of the parsed contract and the session's output
 // name list, so it needs no session and is unit-testable on its own.
 // Throws std::runtime_error naming the problem: the missing/unknown/
 // duplicated output(s), alongside the full session output list where that
@@ -38,10 +42,11 @@ void validate_contract_names(const MergedContract&           contract,
 
 // Every contract-named output's declared shape and element type agree with
 // what its consumer requires at run time: the speed levels' box/cls geometry
-// (guards assemble_speed()'s box_count/cls_count check before it can ever
-// trip on frame 1), the head tensor's row count (apply_head), the steer_xp
-// logits' row count (apply_steer_xp), and the passthrough tensors' fixed
-// 64-element size (copy_64). Every one of those consumers calls
+// and their cross-level agreement on the class count (guards
+// assemble_speed()'s box_count/cls_count and class-count checks before either
+// can ever trip on frame 1), the head tensor's row count (apply_head), the
+// steer_xp logits' row count (apply_steer_xp), and the passthrough tensors'
+// fixed 64-element size (copy_64). Every one of those consumers calls
 // GetTensorData<float>(), which throws Ort::Exception -- not
 // std::runtime_error -- on a non-float tensor, so element type is checked
 // here too.
@@ -59,11 +64,13 @@ void validate_output_shapes(
     const MergedContract&                                  contract,
     const std::unordered_map<std::string, DeclaredOutput>& declared);
 
-// True when output_names holds the minimum set a plain-merged (no contract)
-// session must expose for lateral fusion to have a real ego path: steer_xp
-// and steer_h_vector. Without both, AutoSteerOutput::valid would end up set
-// from whichever one of the two run() actually finds, reporting a
-// half-filled (or all-zero) frame as good.
+// True when output_names holds every output run()'s plain-merged branch
+// resolves: steer_xp and steer_h_vector, so lateral fusion has a real ego
+// path and AutoSteerOutput::valid is not set from a half-filled frame; plus
+// drive_distance, drive_curvature, drive_flag_logit and speed_output, whose
+// absence would leave AutoDriveOutput/AutoSpeedOutput permanently invalid.
+// find_output() returns nullptr for an absent name and run() then skips that
+// output with no message, so every name is required here instead.
 // Throws std::runtime_error naming what is missing.
 void validate_plain_merged_names(const std::vector<std::string>& output_names);
 
