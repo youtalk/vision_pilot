@@ -66,6 +66,15 @@ struct MergedContract {
     static MergedContract from_file(const std::string& path);
 };
 
+// Apply the head rule to a [1,3,1,1] raw head tensor: divide element i by
+// alpha[i], apply map[i].activation, and store into the field named by
+// map[i].output. The "drive_flag_logit" row is passed through sigmoid, matching
+// what the split path does in auto_drive.cpp.
+// Throws std::runtime_error when raw_count is smaller than the contract's row
+// count or when a row names an unknown output.
+void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
+                AutoDriveOutput& out);
+
 // Resolve a contract path. Checks "<model_path>.contract.json" first, then
 // "<artifacts_dir>/contract.json". Returns "" when neither exists.
 // Either argument may be empty.

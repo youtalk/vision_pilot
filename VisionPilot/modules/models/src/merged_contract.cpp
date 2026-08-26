@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -98,6 +99,47 @@ ContractSpeed parse_speed(const nlohmann::json& j)
 }
 
 }  // namespace
+
+namespace {
+
+float apply_activation(const std::string& kind, float v)
+{
+    if (kind == "relu") return v > 0.f ? v : 0.f;
+    if (kind == "tanh") return std::tanh(v);
+    return v;  // "none" — validated at parse time
+}
+
+}  // namespace
+
+void apply_head(const ContractHead& head, const float* raw, size_t raw_count,
+                AutoDriveOutput& out)
+{
+    if (raw_count < head.map.size()) {
+        throw std::runtime_error(
+            "[MergedContract] head tensor has " + std::to_string(raw_count) +
+            " elements but the contract describes " +
+            std::to_string(head.map.size()) + " rows");
+    }
+
+    for (size_t i = 0; i < head.map.size(); ++i) {
+        const auto& m = head.map[i];
+        const float v = apply_activation(m.activation, raw[i] / head.alpha[i]);
+
+        if (m.output == "drive_distance") {
+            out.dist_normalized = v;
+        } else if (m.output == "drive_curvature") {
+            out.curvature_raw = v;
+        } else if (m.output == "drive_flag_logit") {
+            out.flag_prob = 1.f / (1.f + std::exp(-v));
+        } else {
+            throw std::runtime_error(
+                "[MergedContract] unknown head output '" + m.output +
+                "'. Expected drive_distance, drive_curvature, or "
+                "drive_flag_logit");
+        }
+    }
+    out.valid = true;
+}
 
 MergedContract MergedContract::from_json_string(const std::string& text)
 {

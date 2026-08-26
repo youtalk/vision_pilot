@@ -284,3 +284,54 @@ TEST(MergedContractFromFile, ThrowsOnMalformedJson)
 
     EXPECT_THROW(MergedContract::from_file(path), std::runtime_error);
 }
+
+TEST(ApplyHead, DividesByAlphaAndAppliesActivations)
+{
+    using visionpilot::models::apply_head;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    ASSERT_TRUE(c.head.has_value());
+
+    // raw = [dist_pre*8, curv_pre*512, flag_logit*0.5]
+    // Chosen pre-activation values: dist 0.25, curv -0.002, flag 1.5
+    const float raw[3] = {0.25f * 8.0f, -0.002f * 512.0f, 1.5f * 0.5f};
+
+    visionpilot::models::AutoDriveOutput out;
+    apply_head(*c.head, raw, 3, out);
+
+    EXPECT_TRUE(out.valid);
+    EXPECT_NEAR(out.dist_normalized, 0.25f, 1e-6f);          // relu(0.25)
+    EXPECT_NEAR(out.curvature_raw, std::tanh(-0.002f), 1e-6f);
+    EXPECT_NEAR(out.flag_prob, 1.f / (1.f + std::exp(-1.5f)), 1e-6f);
+}
+
+TEST(ApplyHead, ReluClampsNegativeDistance)
+{
+    using visionpilot::models::apply_head;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    const float raw[3] = {-1.0f * 8.0f, 0.0f, 0.0f};
+
+    visionpilot::models::AutoDriveOutput out;
+    apply_head(*c.head, raw, 3, out);
+    EXPECT_FLOAT_EQ(out.dist_normalized, 0.0f);
+}
+
+TEST(ApplyHead, RejectsShortRawBuffer)
+{
+    using visionpilot::models::apply_head;
+    const auto c = MergedContract::from_json_string(kV7Contract);
+    const float raw[2] = {0.f, 0.f};
+    visionpilot::models::AutoDriveOutput out;
+    EXPECT_THROW(apply_head(*c.head, raw, 2, out), std::runtime_error);
+}
+
+TEST(ApplyHead, RejectsUnknownHeadOutputName)
+{
+    using visionpilot::models::apply_head;
+    const auto c = MergedContract::from_json_string(R"({
+      "head": {"output": "drive_head_raw", "alpha": [1.0],
+               "map": [["drive_mystery", "relu"]]}
+    })");
+    const float raw[1] = {1.0f};
+    visionpilot::models::AutoDriveOutput out;
+    EXPECT_THROW(apply_head(*c.head, raw, 1, out), std::runtime_error);
+}
