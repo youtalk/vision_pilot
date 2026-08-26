@@ -12,6 +12,8 @@ add_library(models
     src/auto_drive.cpp
     src/auto_steer.cpp
     src/auto_speed.cpp
+    src/backend.cpp
+    src/split_backend.cpp
     src/inference.cpp
     src/merged_contract.cpp
 )

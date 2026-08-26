@@ -2,6 +2,8 @@
 
 #include <common/utils.hpp>
 #include <logging/logger.hpp>
+#include <models/backend.hpp>
+#include <models/split_backend.hpp>
 
 #include <opencv2/imgproc.hpp>
 
@@ -53,16 +55,6 @@ std::vector<float> chw_01(const cv::Mat& bgr)
     return out;
 }
 
-std::string find_model(const std::string& filename) {
-    const std::string local  = "modules/models/weights/" + filename;
-    const std::string system = "/usr/share/visionpilot/modules/models/weights/" + filename;
-
-    if (std::filesystem::exists(local))  return local;
-    if (std::filesystem::exists(system)) return system;
-
-    throw std::runtime_error("Config file not found: " + filename);
-}
-
 }  // namespace
 
 void LatencyStats::update(double pre_, double ad_, double as_, double asp_, double wall_)
@@ -73,18 +65,26 @@ void LatencyStats::update(double pre_, double ad_, double as_, double asp_, doub
 void LatencyStats::print() const
 {
     const double total = pre + wall;
+    const double fps   = total > 0 ? 1000.0 / total : 0.0;
+
+    // A merged backend runs one fused session, so per-branch times do not
+    // exist; ad carries the whole Run.
+    if (as == 0.0 && asp == 0.0) {
+        VP_INFO("Latency  pre=%.1f ms  merged=%.1f ms  wall=%.1f ms  %.0f fps",
+                pre, ad, wall, fps);
+        return;
+    }
     VP_INFO("Latency  pre=%.1f ms  AD=%.1f ms  AS=%.1f ms  ASp=%.1f ms  "
             "parallel=%.1f ms  wall=%.1f ms  %.0f fps",
-            pre, ad, as, asp, wall, total, total > 0 ? 1000.0 / total : 0.0);
+            pre, ad, as, asp, wall, total, fps);
 }
 
 void LatencyStats::reset() { *this = {}; }
 
 InferencePipeline::InferencePipeline(engine::OnnxEngine& engine, const Config& cfg)
-    : auto_drive_(engine, find_model("autodrive_" + cfg.precision + ".onnx"))
-    , auto_steer_(engine, find_model("autosteer_" + cfg.precision + ".onnx"))
-    , auto_speed_(engine, find_model("autospeed_" + cfg.precision + ".onnx"))
 {
+    backend_ = std::make_unique<SplitBackend>(engine, cfg.precision);
+
     fusion::LongitudinalFusion::Config lc;
     lc.debug           = cfg.fusion_debug;
     long_fusion_ = fusion::LongitudinalFusion{lc};
@@ -154,45 +154,27 @@ std::optional<InferenceFrameResult> InferencePipeline::process(const cv::Mat& wa
     auto prev_imn    = chw_imagenet(prev_frame_);
     auto curr_imn    = chw_imagenet(curr_frame_);
     auto curr_01_as  = chw_01(as_input);
-    auto curr_01_asp = curr_01_as;   // shared preprocessing (same image)
     const double ms_pre = Ms(Clock::now() - t0).count();
 
     auto t_wall = Clock::now();
-    auto f_drive = std::async(std::launch::async, [&] {
-        auto t = Clock::now();
-        auto r = auto_drive_.infer(prev_imn.data(), curr_imn.data());
-        return std::make_pair(std::move(r), Ms(Clock::now() - t).count());
-    });
-    auto f_steer = std::async(std::launch::async, [&] {
-        auto t = Clock::now();
-        auto r = auto_steer_.infer(curr_01_as.data());
-        return std::make_pair(std::move(r), Ms(Clock::now() - t).count());
-    });
-    auto f_speed = std::async(std::launch::async, [&] {
-        auto t = Clock::now();
-        auto r = auto_speed_.infer(curr_01_asp.data());
-        return std::make_pair(std::move(r), Ms(Clock::now() - t).count());
-    });
-
-    auto [res_drive, ms_drive] = f_drive.get();
-    auto [res_steer, ms_steer] = f_steer.get();
-    auto [res_speed, ms_speed] = f_speed.get();
+    const BackendOutputs r = backend_->run(prev_imn.data(), curr_imn.data(),
+                                           curr_01_as.data());
     const double ms_wall = Ms(Clock::now() - t_wall).count();
 
     InferenceFrameResult out;
     out.frame_id   = frame_count_;
     out.wall_ms    = ms_wall;
     out.pre_ms     = ms_pre;
-    out.ad_ms      = ms_drive;
-    out.as_ms      = ms_steer;
-    out.asp_ms     = ms_speed;
-    out.auto_drive = res_drive;
-    out.auto_steer = res_steer;
-    out.auto_speed = res_speed;
-    out.cipo       = long_fusion_.update(res_drive, res_speed, warped);
-    out.lateral    = lat_fusion_.update(res_steer, res_drive);
+    out.ad_ms      = r.ad_ms;
+    out.as_ms      = r.as_ms;
+    out.asp_ms     = r.asp_ms;
+    out.auto_drive = r.drive;
+    out.auto_steer = r.steer;
+    out.auto_speed = r.speed;
+    out.cipo       = long_fusion_.update(r.drive, r.speed, warped);
+    out.lateral    = lat_fusion_.update(r.steer, r.drive);
 
-    stats_.update(ms_pre, ms_drive, ms_steer, ms_speed, ms_wall);
+    stats_.update(ms_pre, r.ad_ms, r.as_ms, r.asp_ms, ms_wall);
     return out;
 }
 

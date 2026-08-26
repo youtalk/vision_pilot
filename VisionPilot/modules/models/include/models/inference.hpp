@@ -5,12 +5,14 @@
 #include <models/auto_drive.hpp>
 #include <models/auto_steer.hpp>
 #include <models/auto_speed.hpp>
+#include <models/backend.hpp>
 #include <opencv2/core.hpp>
 
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
-#include <filesystem>
 
 namespace visionpilot::engine {
 class OnnxEngine;
@@ -81,9 +83,7 @@ public:
 private:
     cv::Mat H_resized_;
     cv::Mat H_world2resized_;
-    AutoDrive          auto_drive_;
-    AutoSteer          auto_steer_;
-    AutoSpeed          auto_speed_;
+    std::unique_ptr<ModelBackend> backend_;
     fusion::LongitudinalFusion long_fusion_;
     fusion::LateralFusion      lat_fusion_;
     LatencyStats       stats_;
