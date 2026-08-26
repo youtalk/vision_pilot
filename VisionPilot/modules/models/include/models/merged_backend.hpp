@@ -112,6 +112,9 @@ public:
                   const std::string&  model_path,
                   const std::string&  contract_path);
 
+    // Ends session profiling if verify_offload() never got the chance to.
+    ~MergedBackend() override;
+
     BackendOutputs run(const float* prev_imn,
                        const float* curr_imn,
                        const float* curr_01) override;
@@ -128,6 +131,13 @@ private:
     const Ort::Value* find_output(const std::string& name) const;
     void validate_contract() const;
 
+    // Read the graph's own (non-rewritten) drive and speed outputs. Used by
+    // plain-merged mode and by a contract that carries no head/speed rule --
+    // without which those outputs would stay default-constructed on every
+    // frame, which longitudinal fusion reads as a clear road.
+    void read_plain_drive(BackendOutputs& out) const;
+    void read_plain_speed(BackendOutputs& out) const;
+
     std::unique_ptr<Ort::Session> session_;
     Ort::MemoryInfo               mem_info_;
 
@@ -142,6 +152,9 @@ private:
     std::string                   arena_shrink_;
     std::string                   provider_;
     int                           require_npu_nodes_ = 0;
+    // True between session creation and the EndProfiling call. Only the
+    // renesas provider enables profiling; see create_renesas_session().
+    bool                          profiling_active_ = false;
     float                         conf_thres_ = 0.6f;
     float                         iou_thres_  = 0.45f;
 

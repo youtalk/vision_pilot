@@ -107,10 +107,21 @@ RenesasArtifacts resolve_renesas_artifacts(const std::string& artifacts_dir)
         throw std::runtime_error(msg);
     }
 
+    // base is the artifacts directory's PARENT, derived from a normalised
+    // absolute copy rather than from `dir` directly. A configured path with a
+    // trailing separator (".../v7_artifacts/") has an empty filename, so
+    // parent_path() would return the artifacts directory itself; a relative
+    // single-component path ("v7_artifacts") would make it empty outright.
+    // Either would hand the execution provider a base_path that resolves the
+    // artifacts' recorded absolute paths against the wrong root -- exactly
+    // the "nnx load failed:" failure this field exists to avoid.
+    fs::path base_dir = fs::absolute(dir).lexically_normal();
+    if (base_dir.filename().empty()) base_dir = base_dir.parent_path();
+
     RenesasArtifacts a;
     a.model        = legalized;
     a.manifest     = manifest.string();
-    a.base         = dir.parent_path().string();
+    a.base         = base_dir.parent_path().string();
     a.qdq_inserted = qdq;
     return a;
 }

@@ -33,6 +33,21 @@ void copy_64(const Ort::Value& v, std::array<float, 64>& dst,
                 dst.size() * sizeof(float));
 }
 
+// Read element 0 of a tensor that must hold at least one element. The plain
+// drive scalars are read this way because validate_output_shapes() -- which
+// would have caught a zero-element tensor at startup -- runs only in
+// contract mode; an unguarded [0] here would be an out-of-bounds read.
+float read_scalar(const Ort::Value& v, const std::string& name)
+{
+    const auto info = v.GetTensorTypeAndShapeInfo();
+    if (info.GetElementCount() == 0) {
+        throw std::runtime_error(
+            "[MergedBackend] output '" + name + "' holds no elements, but a "
+            "scalar is required");
+    }
+    return v.GetTensorData<float>()[0];
+}
+
 }  // namespace
 
 void validate_contract_names(const MergedContract&           contract,
@@ -138,6 +153,22 @@ void validate_contract_names(const MergedContract&           contract,
                     "A rewritten (v6/v7) contract must supply 'head'.");
             }
         }
+        // Not a rewritten head, so run() falls back to the plain drive
+        // scalars. All three must be present: without them out.drive stays
+        // default-constructed on every frame with no message at all, which
+        // is the same silent "clear road" the branch above refuses.
+        for (const char* n : {"drive_distance", "drive_curvature",
+                              "drive_flag_logit"}) {
+            if (!exists(n)) {
+                throw std::runtime_error(
+                    "[MergedBackend] the contract has no 'head' rule and the "
+                    "session does not expose '" + std::string(n) +
+                    "' either, so AutoDriveOutput would stay "
+                    "default-constructed (valid=false) on every frame with "
+                    "no error, which longitudinal fusion reads as a clear "
+                    "road.");
+            }
+        }
     }
 
     // 6. Likewise for the per-level speed tail: without a speed rule the
@@ -152,6 +183,15 @@ void validate_contract_names(const MergedContract&           contract,
                     "no error, which longitudinal fusion reads as a clear "
                     "road. A rewritten (v6/v7) contract must supply 'speed'.");
             }
+        }
+        // Likewise, run() falls back to the plain detection tensor.
+        if (!exists("speed_output")) {
+            throw std::runtime_error(
+                "[MergedBackend] the contract has no 'speed' rule and the "
+                "session does not expose 'speed_output' either, so "
+                "AutoSpeedOutput would stay default-constructed (no "
+                "detections) on every frame with no error, which "
+                "longitudinal fusion reads as a clear road.");
         }
     }
 }
@@ -348,6 +388,10 @@ MergedBackend::MergedBackend(engine::OnnxEngine& engine,
     , provider_(engine.config().provider)
     , require_npu_nodes_(engine.config().require_npu_nodes)
 {
+    // create_renesas_session() enables profiling for the offload gate; no
+    // other provider does.
+    profiling_active_ = provider_ == "renesas";
+
     Ort::AllocatorWithDefaultOptions alloc;
 
     const size_t n_in = session_->GetInputCount();
@@ -432,6 +476,24 @@ MergedBackend::MergedBackend(engine::OnnxEngine& engine,
     printf("[MergedBackend] Ready — %zu inputs, %zu outputs\n", n_in, n_out);
 }
 
+MergedBackend::~MergedBackend()
+{
+    // Backstop for the profiling create_renesas_session() turns on.
+    // verify_offload() is the only place that ends it, and it runs from
+    // InferencePipeline::process() -- never reached if the source dies
+    // before a second frame arrives, or if this backend is driven directly.
+    // Left enabled, ORT records an event per op for the rest of the
+    // process's life and grows the profile file without bound.
+    if (!profiling_active_) return;
+    try {
+        Ort::AllocatorWithDefaultOptions alloc;
+        session_->EndProfilingAllocated(alloc);
+    } catch (...) {
+        // A destructor must not throw, and there is nothing left to report
+        // the failure to.
+    }
+}
+
 const Ort::Value* MergedBackend::find_output(const std::string& name) const
 {
     const auto it = out_index_.find(name);
@@ -467,6 +529,41 @@ void MergedBackend::validate_contract() const
                                                       info.GetElementType()};
     }
     validate_output_shapes(*contract_, declared);
+}
+
+void MergedBackend::read_plain_drive(BackendOutputs& out) const
+{
+    const Ort::Value* d0 = find_output("drive_distance");
+    const Ort::Value* d1 = find_output("drive_curvature");
+    const Ort::Value* d2 = find_output("drive_flag_logit");
+    if (d0 == nullptr || d1 == nullptr || d2 == nullptr) return;
+
+    out.drive.dist_normalized = read_scalar(*d0, "drive_distance");
+    out.drive.curvature_raw   = read_scalar(*d1, "drive_curvature");
+    out.drive.flag_prob =
+        1.f / (1.f + std::exp(-read_scalar(*d2, "drive_flag_logit")));
+    out.drive.valid = true;
+}
+
+void MergedBackend::read_plain_speed(BackendOutputs& out) const
+{
+    const Ort::Value* v = find_output("speed_output");
+    if (v == nullptr) return;
+
+    const auto shape = v->GetTensorTypeAndShapeInfo().GetShape();
+    if (shape.size() < 3) {
+        // Throwing rather than skipping: silently leaving AutoSpeedOutput
+        // empty is read downstream as a clear road, which is precisely the
+        // failure every other guard in this file exists to prevent.
+        throw std::runtime_error(
+            "[MergedBackend] output 'speed_output' has rank " +
+            std::to_string(shape.size()) + ", expected at least 3 ([1,C,N])");
+    }
+    // The standalone graph emits class logits.
+    out.speed = decode_detections(v->GetTensorData<float>(),
+                                  shape[1], shape[2],
+                                  /*cls_is_probability=*/false,
+                                  conf_thres_, iou_thres_);
 }
 
 BackendOutputs MergedBackend::run(const float* prev_imn,
@@ -557,6 +654,13 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
                 apply_head(*contract_->head, v->GetTensorData<float>(),
                            v->GetTensorTypeAndShapeInfo().GetElementCount(),
                            out.drive);
+            } else {
+                // No head rule means this is not a rewritten head, so the
+                // plain drive scalars carry AutoDrive. Reading them here is
+                // what keeps a rule-less contract from leaving out.drive
+                // permanently invalid; validate_contract_names() guaranteed
+                // all three outputs exist.
+                read_plain_drive(out);
             }
 
             if (contract_->speed) {
@@ -595,6 +699,11 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
                                               a.anchors,
                                               /*cls_is_probability=*/true,
                                               conf_thres_, iou_thres_);
+            } else {
+                // No speed rule means the graph's own detection tail is
+                // intact, so read it the plain way rather than leaving
+                // AutoSpeedOutput permanently empty.
+                read_plain_speed(out);
             }
         } else {
             // Plain merged: prefixed copies of the original outputs.
@@ -615,26 +724,8 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
             }
             out.steer.valid = xp_ok && h_vector_ok;
 
-            if (const Ort::Value* v = find_output("speed_output")) {
-                const auto shape = v->GetTensorTypeAndShapeInfo().GetShape();
-                if (shape.size() >= 3) {
-                    // The standalone graph emits class logits.
-                    out.speed = decode_detections(v->GetTensorData<float>(),
-                                                  shape[1], shape[2],
-                                                  /*cls_is_probability=*/false,
-                                                  conf_thres_, iou_thres_);
-                }
-            }
-            const Ort::Value* d0 = find_output("drive_distance");
-            const Ort::Value* d1 = find_output("drive_curvature");
-            const Ort::Value* d2 = find_output("drive_flag_logit");
-            if (d0 && d1 && d2) {
-                out.drive.dist_normalized = d0->GetTensorData<float>()[0];
-                out.drive.curvature_raw   = d1->GetTensorData<float>()[0];
-                out.drive.flag_prob =
-                    1.f / (1.f + std::exp(-d2->GetTensorData<float>()[0]));
-                out.drive.valid = true;
-            }
+            read_plain_speed(out);
+            read_plain_drive(out);
         }
     } catch (const std::runtime_error& e) {
         // Structural contract errors are caught at startup by
@@ -694,6 +785,7 @@ void MergedBackend::verify_offload(const float* prev_imn,
     // the profile in the error below.
     Ort::AllocatorWithDefaultOptions alloc;
     const auto profile = session_->EndProfilingAllocated(alloc);
+    profiling_active_ = false;
     const std::string profile_path = profile.get();
 
     if (probe.ad_ms <= 0.0) {

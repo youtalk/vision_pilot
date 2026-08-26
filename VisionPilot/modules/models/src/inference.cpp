@@ -215,11 +215,15 @@ std::optional<InferenceFrameResult> InferencePipeline::process(const cv::Mat& wa
     const double ms_pre = Ms(Clock::now() - t0).count();
 
     if (!offload_verified_) {
-        offload_verified_ = true;
         if (auto* merged = dynamic_cast<MergedBackend*>(backend_.get())) {
             merged->verify_offload(prev_imn.data(), curr_imn.data(),
                                     curr_01_as.data());
         }
+        // Set only once the gate has actually passed. Setting it first would
+        // let any caller that catches per-frame exceptions skip the gate for
+        // the rest of the run and drive on exactly the silent CPU fallback
+        // the gate exists to catch.
+        offload_verified_ = true;
     }
 
     auto t_wall = Clock::now();

@@ -318,12 +318,53 @@ TEST(ValidateContractNames, AcceptsNoHeadOrSpeedRuleOnANonRewrittenSession)
 {
     // A session exposing neither marker is not a rewritten artifact set, so
     // neither rule may be demanded of its contract. This is what keeps the
-    // two new guards from firing on anything but v6/v7 outputs.
+    // two new guards from firing on anything but v6/v7 outputs. run() then
+    // reads the graph's own drive/speed outputs, so those must be present.
     const char* json = R"({"passthrough": ["steer_lane_value", "steer_height"]})";
     const auto  c    = MergedContract::from_json_string(json);
     const std::vector<std::string> outputs = {
-        "steer_lane_value", "steer_height", "speed_l15_cls", "speed_output"};
+        "steer_lane_value", "steer_height", "speed_l15_cls", "speed_output",
+        "drive_distance",   "drive_curvature", "drive_flag_logit"};
     EXPECT_NO_THROW(validate_contract_names(c, outputs));
+}
+
+TEST(ValidateContractNames, RejectsNoHeadRuleWithNoPlainDriveOutputsEither)
+{
+    // Neither route to AutoDrive exists: no rewritten head for a head rule to
+    // decode, and no plain drive scalars for run() to fall back to. Accepting
+    // this would leave out.drive invalid on every frame, which longitudinal
+    // fusion reads as a clear road.
+    const char* json = R"({"passthrough": ["steer_lane_value", "steer_height"]})";
+    const auto  c    = MergedContract::from_json_string(json);
+    const std::vector<std::string> outputs = {
+        "steer_lane_value", "steer_height", "speed_output"};
+    try {
+        validate_contract_names(c, outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "no 'head' rule")) << msg;
+        EXPECT_TRUE(contains(msg, "drive_distance")) << msg;
+    }
+}
+
+TEST(ValidateContractNames, RejectsNoSpeedRuleWithNoPlainSpeedOutputEither)
+{
+    // Same hole on the detection side: no speed_l<N>_box to demand a speed
+    // rule for, and no speed_output for run() to read instead.
+    const char* json = R"({"passthrough": ["steer_lane_value", "steer_height"]})";
+    const auto  c    = MergedContract::from_json_string(json);
+    const std::vector<std::string> outputs = {
+        "steer_lane_value", "steer_height",
+        "drive_distance", "drive_curvature", "drive_flag_logit"};
+    try {
+        validate_contract_names(c, outputs);
+        FAIL() << "expected std::runtime_error";
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        EXPECT_TRUE(contains(msg, "no 'speed' rule")) << msg;
+        EXPECT_TRUE(contains(msg, "speed_output")) << msg;
+    }
 }
 
 // ─── validate_output_shapes ─────────────────────────────────────────────────

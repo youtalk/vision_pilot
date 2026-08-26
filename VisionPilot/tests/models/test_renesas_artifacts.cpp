@@ -92,6 +92,34 @@ TEST_F(ArtifactsDir, ResolvesCompleteSet)
     EXPECT_EQ(a.base, root_.string());
 }
 
+TEST_F(ArtifactsDir, TrailingSeparatorStillYieldsTheParentAsBase)
+{
+    // A configured path with a trailing separator leaves an empty filename,
+    // so a bare parent_path() would return the artifacts directory itself.
+    // The execution provider would then resolve the artifacts' recorded
+    // absolute paths against the wrong root and fail with "nnx load failed:"
+    // naming a path that exists only on the compile host.
+    complete_set();
+    const auto a = resolve_renesas_artifacts(dir_.string() + "/");
+
+    EXPECT_EQ(a.base, root_.string());
+}
+
+TEST_F(ArtifactsDir, RelativeSingleComponentPathStillYieldsAnAbsoluteBase)
+{
+    // parent_path() of a relative one-component path is empty, which would
+    // hand the execution provider an empty base_path.
+    complete_set();
+
+    const auto cwd = fs::current_path();
+    fs::current_path(root_);
+    const auto a = resolve_renesas_artifacts("artifacts_set_a");
+    fs::current_path(cwd);
+
+    EXPECT_FALSE(a.base.empty());
+    EXPECT_EQ(fs::path(a.base).filename(), root_.filename());
+}
+
 TEST_F(ArtifactsDir, PrefersQdqInsertedModel)
 {
     complete_set();
