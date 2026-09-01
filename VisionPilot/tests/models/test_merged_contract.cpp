@@ -266,6 +266,73 @@ TEST(ResolveContractPath, ReturnsEmptyWhenBothArgumentsAreEmpty)
     EXPECT_EQ(resolve_contract_path("", ""), "");
 }
 
+// A contract is distributed under the sidecar name of the model it was
+// rewritten from, and under the renesas provider there is no model path to
+// hang that name off -- resolve_merged_target() passes an empty model_path and
+// the file actually loaded is the compiled qdq_inserted_* one. So the
+// distributed name has to be accepted inside the artifacts directory.
+TEST(ResolveContractPath, AcceptsDistributedSidecarNameInsideArtifactsDir)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    const auto distributed =
+        (dir.path() / "v7_frozen.onnx.contract.json").string();
+    write_file(distributed, "{}");
+
+    EXPECT_EQ(resolve_contract_path("", artifacts_dir), distributed);
+}
+
+TEST(ResolveContractPath, PrefersPlainContractJsonOverDistributedName)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    const auto plain = (dir.path() / "contract.json").string();
+    write_file(plain, "{}");
+    write_file((dir.path() / "v7_frozen.onnx.contract.json").string(), "{}");
+
+    EXPECT_EQ(resolve_contract_path("", artifacts_dir), plain);
+}
+
+// Choosing one would silently decide which rewrite's host postprocessing runs,
+// and nothing downstream can detect the wrong pick.
+TEST(ResolveContractPath, RefusesTwoDistributedSidecarsAsAmbiguous)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    write_file((dir.path() / "v6_frozen.onnx.contract.json").string(), "{}");
+    write_file((dir.path() / "v7_frozen.onnx.contract.json").string(), "{}");
+
+    EXPECT_THROW(resolve_contract_path("", artifacts_dir),
+                 std::runtime_error);
+}
+
+TEST(ResolveContractPath, IgnoresUnrelatedFilesInArtifactsDir)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    write_file((dir.path() / "manifest.json").string(), "{}");
+    write_file((dir.path() / "contract.json.bak").string(), "{}");
+
+    EXPECT_EQ(resolve_contract_path("", artifacts_dir), "");
+}
+
+TEST(ResolveContractPath, ModelPathSidecarStillWinsOverDistributedName)
+{
+    ScopedTempDir dir;
+    const auto artifacts_dir = dir.path().string();
+    const auto model_path    = (dir.path() / "model.onnx").string();
+    const auto sidecar       = model_path + ".contract.json";
+    write_file(sidecar, "{}");
+    write_file((dir.path() / "v7_frozen.onnx.contract.json").string(), "{}");
+
+    EXPECT_EQ(resolve_contract_path(model_path, artifacts_dir), sidecar);
+}
+
+TEST(ResolveContractPath, ReturnsEmptyWhenArtifactsDirDoesNotExist)
+{
+    EXPECT_EQ(resolve_contract_path("", "/nonexistent/artifacts/dir"), "");
+}
+
 TEST(MergedContractFromFile, ParsesSameAsFromJsonString)
 {
     ScopedTempDir dir;

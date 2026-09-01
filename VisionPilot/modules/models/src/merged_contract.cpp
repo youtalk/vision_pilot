@@ -2,10 +2,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace visionpilot::models {
 
@@ -332,16 +336,56 @@ MergedContract MergedContract::from_file(const std::string& path)
 std::string resolve_contract_path(const std::string& model_path,
                                   const std::string& artifacts_dir)
 {
+    namespace fs = std::filesystem;
+
     if (!model_path.empty()) {
         const std::string sidecar = model_path + ".contract.json";
-        if (std::filesystem::exists(sidecar)) return sidecar;
+        if (fs::exists(sidecar)) return sidecar;
     }
-    if (!artifacts_dir.empty()) {
-        const auto in_dir =
-            std::filesystem::path(artifacts_dir) / "contract.json";
-        if (std::filesystem::exists(in_dir)) return in_dir.string();
+    if (artifacts_dir.empty()) return {};
+
+    const auto in_dir = fs::path(artifacts_dir) / "contract.json";
+    if (fs::exists(in_dir)) return in_dir.string();
+
+    // A contract is distributed under the sidecar name of the model it was
+    // rewritten from ("v7_frozen.onnx.contract.json"), and under the renesas
+    // provider there is nothing to hang that name off: resolve_merged_target()
+    // has no model path to pass, and the file the session actually loads is
+    // the compiled qdq_inserted_* one, not the model the sidecar is named
+    // after. So a sidecar lookup keyed on the resolved model would not help
+    // either. Accept the distributed name where it lands instead of requiring
+    // every user to rename the file.
+    std::error_code ec;
+    if (!fs::is_directory(artifacts_dir, ec) || ec) return {};
+
+    static constexpr std::string_view kSuffix = ".contract.json";
+    std::vector<std::string> matches;
+    for (const auto& e : fs::directory_iterator(artifacts_dir)) {
+        if (!e.is_regular_file()) continue;
+        const std::string name = e.path().filename().string();
+        if (name.size() > kSuffix.size() &&
+            name.compare(name.size() - kSuffix.size(), kSuffix.size(),
+                         kSuffix) == 0) {
+            matches.push_back(e.path().string());
+        }
     }
-    return {};
+
+    if (matches.empty()) return {};
+    if (matches.size() > 1) {
+        // Picking one would silently decide which rewrite's host
+        // postprocessing runs, and a wrong pick is not detectable downstream:
+        // the head alpha, the lane rule and the speed geometry would all be
+        // read from a contract that does not describe this graph.
+        std::sort(matches.begin(), matches.end());
+        std::string msg =
+            "[MergedContract] " + artifacts_dir +
+            " holds more than one *.contract.json, so which contract applies "
+            "is ambiguous. Keep exactly one, rename the intended one to "
+            "contract.json, or set model.contract explicitly. Found:";
+        for (const auto& m : matches) msg += "\n  " + m;
+        throw std::runtime_error(msg);
+    }
+    return matches.front();
 }
 
 bool is_drive_head_raw_output(const std::string& name)

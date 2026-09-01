@@ -122,9 +122,14 @@ struct AssembledSpeed {
 // guarding against a contract that mis-describes the graph's real outputs.
 AssembledSpeed assemble_speed(const std::vector<SpeedLevelTensors>& levels);
 
-// Resolve a contract path. Checks "<model_path>.contract.json" first, then
-// "<artifacts_dir>/contract.json". Returns "" when neither exists.
-// Either argument may be empty.
+// Resolve a contract path, in order: "<model_path>.contract.json", then
+// "<artifacts_dir>/contract.json", then a single "*.contract.json" inside
+// artifacts_dir -- the name a contract is distributed under, which is the only
+// form available under the renesas provider because there is no model path to
+// key a sidecar on. Returns "" when none exists. Either argument may be empty.
+// Throws std::runtime_error when artifacts_dir holds more than one
+// "*.contract.json", since choosing one would silently pick which rewrite's
+// host postprocessing runs.
 std::string resolve_contract_path(const std::string& model_path,
                                   const std::string& artifacts_dir);
 
