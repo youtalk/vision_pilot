@@ -2,6 +2,8 @@
 
 # Build:
 #   docker build -t visionpilot:cpu -f docker/Dockerfile.cpu .     (run from inside VisionPilot/)
+# Unit tests (builds and runs models_tests, does not need the app target):
+#   docker build --target tests -f docker/Dockerfile.cpu .
 # Run:
 #   docker run --rm -it -v <TEST_DATA_DIR>:<CONFIG_TEST_DATA_DIR>:ro -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix:rw visionpilot:cpu
 
@@ -45,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcppad-dev \
         liblapack-dev \
         libblas-dev \
+        libgtest-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # CppAD's cppad/ipopt/solve.hpp hardcodes #include <coin-or/IpIpoptApplication.hpp>,
@@ -95,12 +98,37 @@ RUN set -eux; \
 WORKDIR /opt/visionpilot
 COPY . .
 
+# Configure once, then build the unit suite and generate_config -- but not the
+# app -- in this stage. Two reasons to keep the app out of it:
+#
+#  * app/vision_pilot.cpp:66 passes one argument to the two-argument
+#    vehicle_interface::FileInterface(path, loop) introduced upstream by
+#    2fbbd941 (#406). That defect is untouched by this branch, and building the
+#    app first made the test suite unreachable from the container.
+#  * generate_config is a CMake ALL target, so `make <specific-target>` skips
+#    it. It writes build/config/homography_C_matrix.yaml, which
+#    ImagePreprocessor hard-requires at runtime and which is not in the repo,
+#    so naming it explicitly is what makes the runtime image usable.
 RUN mkdir build && cd build \
     && if [ "$ENABLE_ROS2" = "ON" ]; then . /opt/ros/jazzy/setup.bash; fi \
     && cmake -DONNXRUNTIME_ROOT=/usr/share/visionpilot/onnxruntime -DGPU=OFF \
              -DENABLE_ROS2_INTERFACE=${ENABLE_ROS2} \
              -DENABLE_OCCUPANCY=${ENABLE_OCCUPANCY} \
+             -DBUILD_TESTING=ON \
              -DCMAKE_CXX_STANDARD_LIBRARIES="-lcppad_lib" .. \
+    && make -j"$(nproc)" generate_config models_tests
+
+
+# tests — `docker build --target tests` is the unit-test gate.
+FROM builder AS tests
+RUN /opt/visionpilot/build/models_tests
+
+
+# app
+FROM builder AS app
+ARG ENABLE_ROS2
+RUN cd build \
+    && if [ "$ENABLE_ROS2" = "ON" ]; then . /opt/ros/jazzy/setup.bash; fi \
     && make -j"$(nproc)" VisionPilot
 
 # runtime
@@ -158,7 +186,7 @@ RUN mkdir -p /usr/share/visionpilot
 # binary's INSTALL_RPATH (/usr/share/visionpilot/onnxruntime/lib).
 COPY --from=builder /usr/share/visionpilot/onnxruntime /usr/share/visionpilot/onnxruntime
 
-COPY --from=builder /opt/visionpilot/build/VisionPilot /usr/bin/VisionPilot
+COPY --from=app /opt/visionpilot/build/VisionPilot /usr/bin/VisionPilot
 COPY --from=builder /opt/visionpilot/build/config /usr/share/visionpilot/config
 COPY --from=builder /opt/visionpilot/assets/icons /usr/share/visionpilot/assets/icons
 COPY --from=builder /opt/visionpilot/modules/models/weights /usr/share/visionpilot/modules/models/weights
