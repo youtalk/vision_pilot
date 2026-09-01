@@ -357,9 +357,17 @@ void validate_plain_merged_names(const std::vector<std::string>& output_names)
     // outputs lateral fusion needs, and the four drive/speed outputs whose
     // absence would leave AutoDrive and AutoSpeed permanently invalid -- which
     // longitudinal fusion reads as a clear road, not as an error.
+    //
+    // The steer names are the merge tool's PREFIXED ORIGINAL ones. AutoSteer's
+    // graph emits "lane_value" and "height" (the split path reads them
+    // positionally into xp and h_vector, which is why their graph names never
+    // mattered there), so a merged model carries "steer_lane_value" and
+    // "steer_height" -- the same two names the contract branch routes through
+    // its passthrough list. "steer_xp" is a contract RULE name; no model emits
+    // it, so requiring it here meant plain-merged mode could never start.
     std::vector<std::string> missing;
-    if (!exists("steer_xp"))         missing.push_back("steer_xp");
-    if (!exists("steer_h_vector"))   missing.push_back("steer_h_vector");
+    if (!exists("steer_lane_value")) missing.push_back("steer_lane_value");
+    if (!exists("steer_height"))     missing.push_back("steer_height");
     if (!exists("drive_distance"))   missing.push_back("drive_distance");
     if (!exists("drive_curvature"))  missing.push_back("drive_curvature");
     if (!exists("drive_flag_logit")) missing.push_back("drive_flag_logit");
@@ -714,12 +722,12 @@ BackendOutputs MergedBackend::run(const float* prev_imn,
             // valid still tracks what really happened this frame.
             bool xp_ok = false;
             bool h_vector_ok = false;
-            if (const Ort::Value* v = find_output("steer_xp")) {
-                copy_64(*v, out.steer.xp, "steer_xp");
+            if (const Ort::Value* v = find_output("steer_lane_value")) {
+                copy_64(*v, out.steer.xp, "steer_lane_value");
                 xp_ok = true;
             }
-            if (const Ort::Value* v = find_output("steer_h_vector")) {
-                copy_64(*v, out.steer.h_vector, "steer_h_vector");
+            if (const Ort::Value* v = find_output("steer_height")) {
+                copy_64(*v, out.steer.h_vector, "steer_height");
                 h_vector_ok = true;
             }
             out.steer.valid = xp_ok && h_vector_ok;

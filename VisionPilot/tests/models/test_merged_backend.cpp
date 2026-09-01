@@ -72,8 +72,8 @@ bool contains(const std::string& haystack, const std::string& needle)
 
 // Every output run()'s plain-merged branch resolves with find_output().
 const std::vector<std::string> kPlainMergedOutputs = {
-    "steer_xp",       "steer_h_vector",   "drive_distance",
-    "drive_curvature", "drive_flag_logit", "speed_output"};
+    "steer_lane_value", "steer_height",     "drive_distance",
+    "drive_curvature",  "drive_flag_logit", "speed_output"};
 
 // kPlainMergedOutputs with one name removed, so each test isolates exactly
 // one missing output.
@@ -611,15 +611,19 @@ TEST(ValidatePlainMergedNames, AcceptsCompleteOutputList)
     EXPECT_NO_THROW(validate_plain_merged_names(kPlainMergedOutputs));
 }
 
-TEST(ValidatePlainMergedNames, RejectsMissingSteerHVector)
+TEST(ValidatePlainMergedNames, RejectsMissingSteerHeight)
 {
-    expect_only_missing(plain_merged_without("steer_h_vector"),
-                        "steer_h_vector");
+    expect_only_missing(plain_merged_without("steer_height"), "steer_height");
 }
 
-TEST(ValidatePlainMergedNames, RejectsMissingSteerXp)
+// The plain-merged branch reads the merge tool's PREFIXED ORIGINAL names.
+// AutoSteer's own graph outputs are "lane_value" and "height", so a merged
+// model carries "steer_lane_value" / "steer_height" -- never "steer_xp",
+// which is a contract RULE name and no model ever emits it.
+TEST(ValidatePlainMergedNames, RejectsMissingSteerLaneValue)
 {
-    expect_only_missing(plain_merged_without("steer_xp"), "steer_xp");
+    expect_only_missing(plain_merged_without("steer_lane_value"),
+                        "steer_lane_value");
 }
 
 // run()'s plain-merged branch resolves each of the four names below with
@@ -654,17 +658,18 @@ TEST(ValidatePlainMergedNames, RejectsMissingSpeedOutput)
 TEST(ValidatePlainMergedNames, ReportsEveryMissingNameAtOnce)
 {
     try {
-        validate_plain_merged_names({"steer_xp"});
+        validate_plain_merged_names({"steer_lane_value"});
         FAIL() << "expected std::runtime_error";
     } catch (const std::runtime_error& e) {
         const std::string msg = e.what();
         EXPECT_EQ(missing_section(msg),
-                  "\n    steer_h_vector"
+                  "\n    steer_height"
                   "\n    drive_distance"
                   "\n    drive_curvature"
                   "\n    drive_flag_logit"
                   "\n    speed_output") << msg;
         // The session's actual outputs are still listed alongside.
-        EXPECT_TRUE(contains(msg, "Session outputs:\n    steer_xp")) << msg;
+        EXPECT_TRUE(contains(msg, "Session outputs:\n    steer_lane_value"))
+            << msg;
     }
 }
