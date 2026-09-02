@@ -15,6 +15,7 @@ add_library(models
     src/backend.cpp
     src/split_backend.cpp
     src/inference.cpp
+    src/tensor_prep.cpp
     src/merged_contract.cpp
     src/merged_backend.cpp
 )

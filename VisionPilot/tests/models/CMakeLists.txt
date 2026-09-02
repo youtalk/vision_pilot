@@ -8,6 +8,7 @@ add_executable(models_tests
         test_renesas_artifacts.cpp
         test_merged_backend.cpp
         test_inference.cpp
+        test_tensor_prep.cpp
 )
 
 target_link_libraries(models_tests
