@@ -4,6 +4,7 @@
 #include <visualization/occupancy_bridge.hpp>
 #endif
 
+#include "visualization/frame_recorder.hpp"
 #include "visualization/local_display.hpp"
 
 #include <opencv2/highgui.hpp>
@@ -634,7 +635,9 @@ bool Visualization::stop() const
 
 Visualization::Visualization(Config cfg)
 {
-  if (cfg.webrtc_on) {
+  if (!cfg.record_dir.empty()) {
+    visual_interface = std::make_unique<FrameRecorder>(cfg.record_dir);
+  } else if (cfg.webrtc_on) {
     visual_interface = std::make_unique<WebRTCStreamer>();
     static_cast<WebRTCStreamer *>(visual_interface.get())->init(cfg.webrtc_port);
   } else {

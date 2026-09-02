@@ -46,6 +46,9 @@ struct Config {
     bool visualization_on = false;
     bool webrtc_on = false;
     int webrtc_port;
+    // Non-empty: write every rendered frame to this directory as a numbered
+    // PNG instead of showing or streaming it. Used to assemble videos offline.
+    std::string record_dir;
 
     // Rerun logging: when enabled, per-frame data is streamed directly to an
     // .rrd recording ready to open in Rerun viewer.
