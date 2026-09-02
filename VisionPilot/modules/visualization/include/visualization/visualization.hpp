@@ -83,6 +83,9 @@ struct Config
     bool webrtc_on = false;
     int webrtc_port;
     bool show_window = true;   // false → LocalDisplay runs headless (no window)
+    // Non-empty → FrameRecorder writes every frame here instead of displaying
+    // or streaming it. Takes precedence over webrtc_on.
+    std::string record_dir;
 };
 
 void init_production_assets(const std::string& icons_dir = "");
