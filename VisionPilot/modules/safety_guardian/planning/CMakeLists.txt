@@ -3,6 +3,11 @@ cmake_minimum_required(VERSION 3.22.1)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(IPOPT REQUIRED ipopt)
 
+# lateral_planning.cpp instantiates CppAD::put_check_for_nan, which lives in
+# cppad_lib rather than the header-only part. Without this every consumer of
+# libplanning.a fails to link on CppAD::local::temp_file.
+find_library(CPPAD_LIB NAMES cppad_lib)
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -48,4 +53,5 @@ target_link_libraries(planning
         Eigen3::Eigen
         PRIVATE
         ${IPOPT_LIBRARIES}
+        $<$<BOOL:${CPPAD_LIB}>:${CPPAD_LIB}>
 )
