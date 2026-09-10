@@ -1,9 +1,6 @@
 import rclpy
 from rclpy.node import Node
 
-import numpy as np
-import math
-import carla
 from ackermann_msgs.msg import AckermannDriveStamped
 from carla_msgs.msg import CarlaEgoVehicleControl
 from std_msgs.msg import Float64
@@ -12,6 +9,28 @@ MAX_ACCELERATION = 1.5   # m/s²
 MAX_DECELERATION = 3.0   # m/s²
 A_DES_MIN = -8.0         # reject planner spikes below this (phantom CIPO gave -50)
 A_DES_MAX = MAX_ACCELERATION
+
+
+def clamp_acceleration(a, report=False):
+    """Clamp a planner acceleration demand into [A_DES_MIN, A_DES_MAX].
+
+    publish_control turns an acceleration into a speed target, so an
+    unclamped spike does not merely brake hard — it commands a stop. A
+    measured -20.6 m/s² on Town04 became a 0 m/s target at 29.18 m/s,
+    i.e. an emergency stop mid-curve. Clamped to -8.0 the same demand
+    asks for 13.2 m/s instead.
+
+    Clamping rather than dropping the message is deliberate: the node
+    publishes only once a fresh steering AND throttle pair have arrived,
+    so discarding a throttle message suppresses the whole command for
+    that cycle and latches the previous steering as well.
+
+    With report=True, returns (value, was_clamped) so the caller can log.
+    """
+    clamped = min(A_DES_MAX, max(A_DES_MIN, float(a)))
+    if report:
+        return clamped, clamped != a
+    return clamped
 
 
 class CarlaControlPublisher(Node):
@@ -82,7 +101,12 @@ class CarlaControlPublisher(Node):
 
     def throttle_callback(self, msg):
         # self.get_logger().info(f'Throttle command received: {msg.data}')
-        self.acceleration = msg.data
+        self.acceleration, was_clamped = clamp_acceleration(msg.data, report=True)
+        if was_clamped:
+            self.get_logger().warn(
+                f'Planner acceleration {msg.data} m/s^2 outside '
+                f'[{A_DES_MIN}, {A_DES_MAX}] — clamped to {self.acceleration}',
+                throttle_duration_sec=1.0)
         self.have_throttle = True
         self.try_publish()
 
