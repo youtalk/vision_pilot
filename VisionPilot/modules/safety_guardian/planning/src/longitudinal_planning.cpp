@@ -1,17 +1,42 @@
 #include <planning/longitudinal_planning.hpp>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 double dt = 0.05;
 
 LongitudinalPlanner::LongitudinalPlanner(const Config& config)
     : config_(config) {}
 
-double LongitudinalPlanner::compute_acceleration(double kappa, double ego_v, bool has_cipo, double cipo_v, double cipo_distance) {
+double LongitudinalPlanner::curve_speed_limit(const double kappa) const {
+    return std::sqrt(config_.mu * config_.g / std::abs(kappa));   // inf when kappa ~ 0, fine
+}
 
-    // Limit max speed based on road curvature
-    double curv_v_max = std::sqrt(config_.mu * config_.g / std::abs(kappa));   // inf when kappa ~ 0, fine
-    double speed_limit = std::min(config_.speed_limit, curv_v_max);
+double LongitudinalPlanner::curve_acceleration(const Eigen::VectorXd& kappa_preview,
+                                               const Eigen::VectorXd& s_preview,
+                                               const double ego_v,
+                                               const double s_from) const {
+    double demand = std::numeric_limits<double>::infinity();
+
+    for (int i = 0; i < kappa_preview.size(); ++i) {
+        const double s = s_preview[i] - s_from;
+        if (s < 0.0) continue;   // already behind the ego at this horizon step
+
+        const double v_curve = curve_speed_limit(kappa_preview[i]);
+        if (!std::isfinite(v_curve)) continue;   // straight here, no demand
+
+        // Rearranged v² = u² + 2as. Guard s so a curve underfoot gives a large
+        // finite demand rather than a division by zero; the floor below then
+        // bounds it.
+        const double a_req = (v_curve * v_curve - ego_v * ego_v)
+                           / (2.0 * std::max(0.05, s));
+        demand = std::min(demand, a_req);
+    }
+
+    return std::max(-config_.b, demand);   // +inf survives: no curve in view
+}
+
+double LongitudinalPlanner::compute_acceleration(double ego_v, bool has_cipo, double cipo_v, double cipo_distance) {
 
     // Closing speed — negative when ego is slower than lead (gap opening)
     double delta_v = cipo_v; // cipo_v relative CIPO vehicle sppeed
@@ -28,7 +53,7 @@ double LongitudinalPlanner::compute_acceleration(double kappa, double ego_v, boo
     double s = std::max(0.5, cipo_distance);
 
     // Free-road term: positive, drives ego toward speed_limit
-    double free_road_term = std::pow(ego_v / speed_limit, config_.delta);
+    double free_road_term = std::pow(ego_v / config_.speed_limit, config_.delta);
 
     // Interaction term: only active when a real lead vehicle is present.
     double interaction_term  = has_cipo ? std::pow(s_star / s, 2.0) : 0.0;

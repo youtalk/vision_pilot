@@ -121,6 +121,7 @@ LateralPlanner::LateralPlanner() = default;
 LateralPlanner::~LateralPlanner() = default;
 
 std::vector<double> LateralPlanner::compute_steering(const double L,
+                                                     const double ds,
                                                      const VectorXd& state,
                                                      const VectorXd& v_schedule,
                                                      const VectorXd& kappa_schedule)
@@ -131,9 +132,6 @@ std::vector<double> LateralPlanner::compute_steering(const double L,
     {
         return std::vector<double>(N - 1, 0.0);
     }
-
-    // Dynamic spatial step: Ensures lookahead preview horizon (~1.0 sec)
-    const double ds = std::max(0.30, (v_curr * 1.0) / static_cast<double>(N));
 
     typedef CPPAD_TESTVECTOR(double) Dvector;
 

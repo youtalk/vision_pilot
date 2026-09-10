@@ -7,6 +7,21 @@
 #include <planning/longitudinal_planning.hpp>
 #include <planning/lateral_planning.hpp>
 
+// Sample the cubic reference curve y(x) = c0 + c1·x + c2·x² + c3·x³ in the
+// path-tangent frame and return its signed curvature at `count` points spaced
+// `ds` apart, clamped to ±kappa_max.
+//
+//   c1 = tan(epsi), c2 = kappa/2, c3 = dkappa_ds/6
+//
+// Used for both the MPC's curvature schedule (count = N, ds = horizon_step)
+// and the longer longitudinal preview, so the two read the same road.
+Eigen::VectorXd build_kappa_schedule(double epsi,
+                                     double kappa,
+                                     double dkappa_ds,
+                                     double ds,
+                                     double kappa_max,
+                                     int count = -1);   // -1 = N
+
 class Planner {
 public:
     Planner(double speed_limit, double Lf);
