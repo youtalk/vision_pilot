@@ -146,14 +146,20 @@ Plan Planner::compute_plan(
         warnings.push_back(Warning::RLDW);
     }
 
-    // FCW / AEB
-    if (-5.0 <= acceleration && acceleration <= -3.0)
+    // FCW / AEB — only ever about a vehicle in front. Braking for a curve
+    // reaches the same magnitudes (curve_acceleration floors at exactly -b,
+    // which is the bottom of the FCW band), and reporting a forward collision
+    // with an empty road ahead would be wrong.
+    if (has_cipo)
     {
-        warnings.push_back(Warning::FCW);
-    }
-    else if (acceleration < -5.0)
-    {
-        warnings.push_back(Warning::AEB);
+        if (-5.0 <= acceleration && acceleration <= -3.0)
+        {
+            warnings.push_back(Warning::FCW);
+        }
+        else if (acceleration < -5.0)
+        {
+            warnings.push_back(Warning::AEB);
+        }
     }
 
     return {acceleration, steering, warnings};

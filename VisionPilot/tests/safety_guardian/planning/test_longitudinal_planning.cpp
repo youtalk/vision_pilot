@@ -166,6 +166,30 @@ void test_mu_permits_a_realistic_speed_through_the_tightest_town04_curve()
                "tightest Town04 curve permits ~16.4 m/s (37 mph)");
 }
 
+// ── Curve braking must not read as a collision ──────────────────────────────
+
+void test_braking_for_a_curve_raises_no_collision_warning()
+{
+    // FCW fires on -5.0 <= a <= -3.0 and curve braking floors at exactly -b
+    // (-3.0), so without a guard every high-speed curve entry would report a
+    // forward collision with nothing in front of the ego.
+    Planner planner(33.3, 1.4);
+
+    bool saw_collision_warning = false;
+    double v = 29.18;
+
+    // Drive into a tightening curve with no lead vehicle.
+    for (int i = 0; i < 40; ++i) {
+        const Plan plan = planner.compute_plan(0.0, 0.0, KAPPA_CURVE, v, false, 33.3, 9999.0);
+        for (const Warning w : plan.warnings)
+            if (w == Warning::FCW || w == Warning::AEB) saw_collision_warning = true;
+        v = std::max(1.0, v + plan.acceleration * 0.05);
+    }
+
+    check(!saw_collision_warning,
+          "braking for a curve raises neither FCW nor AEB");
+}
+
 // ── Fix 3: one spatial step ─────────────────────────────────────────────────
 
 void test_the_horizon_step_matches_the_mpc_integration_step()
@@ -216,6 +240,7 @@ int main()
     test_the_demand_grows_as_the_curve_approaches();
     test_the_approach_arrives_at_the_curve_speed_without_a_spike();
     test_mu_permits_a_realistic_speed_through_the_tightest_town04_curve();
+    test_braking_for_a_curve_raises_no_collision_warning();
     test_the_horizon_step_matches_the_mpc_integration_step();
     test_the_curvature_schedule_spans_the_mpc_horizon();
 
