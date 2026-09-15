@@ -37,3 +37,44 @@ in-tree templates stay pristine. `config/H_carla.yaml` must be mounted over `Vis
 loads that filename at runtime, and mounting only `homography_C_matrix.yaml` leaves it projecting AutoSteer waypoints
 with the default OpenLane homography. `gen_carla_C_matrix.py` regenerates `config/homography_C_matrix.yaml` from
 `config/H_carla.yaml` whenever the camera rig changes.
+
+### ScenarioRunner
+
+[ScenarioRunner](https://github.com/carla-simulator/scenario_runner) executes the scenarios. Use its `ue58-dev`
+branch. The `master` branch targets CARLA 0.9.x and does not run against a 0.10 server.
+
+```bash
+git clone -b ue58-dev https://github.com/carla-simulator/scenario_runner.git
+cd scenario_runner
+pip3 install -r requirements.txt
+export PYTHONPATH=$CARLA_ROOT/PythonAPI/carla:$PWD
+```
+
+`PYTHONPATH` must contain `$CARLA_ROOT/PythonAPI/carla`. ScenarioRunner imports the `agents` package from there, and
+the `carla` wheel alone does not supply it.
+
+Start the CARLA server, then the bridge, and then the scenario:
+
+```bash
+ros2 launch carla_bridge_bringup carla_bridge.launch.py rig_file:=<path>/config/carla10.json
+python3 scenario_runner.py --openscenario srunner/osc_examples/LaneChangeSimple.xosc --waitForEgo --output
+```
+
+Four rules apply:
+
+- Pass `--waitForEgo`. ScenarioRunner then adopts the ego that `config_carla.py` spawned, which carries the
+  `ros2_ackermann_control` attribute and the `ros_name` that native ROS 2 control needs. Without this option
+  ScenarioRunner spawns its own ego, and CARLA gives that vehicle no ROS 2 name and no control subscriber.
+- Do not pass `--reloadWorld`. It loads the map again and destroys the ego that the bridge spawned.
+- Do not pass `--sync`. `config_carla.py` owns the simulation clock. If both clients tick, each one sees a part of
+  the frames.
+- The scenario map must match the `map` field of the rig file. `LaneChangeSimple.xosc` uses `Town04_Opt`, which is
+  the default of `config/carla10.json`.
+
+If you start `config_carla.py` with `-a`, or with NPC vehicles in the rig, it creates a Traffic Manager on port 8000.
+CARLA gives a Traffic Manager port to one client only, so give ScenarioRunner another port with
+`--trafficManagerPort 8005`. Without NPC vehicles and without `-a` the script creates no Traffic Manager, and
+ScenarioRunner keeps its default port.
+
+The ego stands still until something drives it. VisionPilot drives it in a closed loop run. The scenarios of
+`srunner/osc_examples` assign the `external_control` module to the hero for this reason.
