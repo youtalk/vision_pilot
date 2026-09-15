@@ -2,6 +2,7 @@
   "ignorePaths": [],
   "ignoreRegExpList": [],
   "words": [
+    "argparser",
     "autospeed",
     "autoware",
     "buildx",
@@ -29,14 +30,17 @@
     "openbox",
     "procps",
     "sceneseg",
+    "srunner",
     "tensorrt",
     "tigervnc",
     "torchvision",
     "tqdm",
+    "trafficmanager",
     "videoio",
     "visionpilot",
     "vncpasswd",
     "vncserver",
+    "waypt",
     "websockify",
     "xstartup"
   ]
