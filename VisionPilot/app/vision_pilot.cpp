@@ -63,7 +63,7 @@ int main(int argc, char** argv)
     {
         camera_interface = std::make_unique<camera_interface::FileInterface>(
             cfg.source.input_video, cfg.source.video_loop, cfg.source.video_realtime);
-        vehicle_interface = std::make_shared<FileInterface>(cfg.source.input_vehicle_speed);
+        vehicle_interface = std::make_shared<FileInterface>(cfg.source.input_vehicle_speed, cfg.source.video_loop);
     }
     else
     {
@@ -130,11 +130,11 @@ int main(int argc, char** argv)
         // ── Default frame no inference ────────────────────────────────────────────
         cv::Mat display_frame = resized;
 
-        if (const auto r = pipeline.process(warped, resized))
+        const double ego_v = vehicle_interface->read();
+        VP_INFO("ego_speed=%.2f m/s", ego_v);
+        if (const auto r = pipeline.process(warped, resized,
+                                            static_cast<float>(ego_v), true))
         {
-            // pipeline.latency().print();
-
-            const double ego_v = vehicle_interface->read();
             const double cte = r->lateral.cte_m;
             const double epsi = r->lateral.yaw_rad;
             const double kappa = r->lateral.curvature;
@@ -176,7 +176,9 @@ int main(int argc, char** argv)
                 {
                     // annotate_frame() draws inplace
                     viz = cfg.rrd_on ? resized.clone() : resized;
-                    vd::visualize(viz, *r, source_label(cfg.source), cfg.wheel_dir, pipeline.H_world2resized());
+                    vd::visualize(viz, *r, source_label(cfg.source), cfg.wheel_dir,
+                                  pipeline.H_world2resized(),
+                                  static_cast<float>(ego_v));
                     display_frame = viz;
                 }
                 else

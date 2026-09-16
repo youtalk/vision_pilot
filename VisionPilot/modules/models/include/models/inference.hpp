@@ -33,6 +33,8 @@ struct Config {
     // <artifacts_dir>/contract.json. "none" forces plain-merged mode.
     // Anything else is treated as an explicit contract path.
     std::string contract = "auto";
+
+    fusion::LongitudinalFusion::Config long_fusion;
 };
 
 // The MergedBackend construction target, resolved purely from configuration
@@ -94,7 +96,9 @@ public:
     // resized : plain-resized 1024×512 image → AutoSteer + AutoSpeed.
     //           If empty, falls back to warped for all networks (legacy behaviour).
     std::optional<InferenceFrameResult> process(const cv::Mat& warped,
-                                                const cv::Mat& resized = {});
+                                                const cv::Mat& resized = {},
+                                                float ego_speed_ms = 0.f,
+                                                bool has_ego_speed = false);
 
     // Compute and apply H_resized to both fusion modules so that AutoSteer /
     // AutoSpeed outputs are projected correctly when they run on a resized
@@ -115,6 +119,8 @@ public:
     void reset();
     const LatencyStats& latency() const { return stats_; }
 
+    void set_radar_points(std::vector<fusion::RadarPoint> pts) { radar_points_ = std::move(pts); }
+
 private:
     cv::Mat H_resized_;
     cv::Mat H_world2resized_;
@@ -123,6 +129,7 @@ private:
     fusion::LateralFusion      lat_fusion_;
     LatencyStats       stats_;
     uint64_t           frame_count_ = 0;
+    std::vector<fusion::RadarPoint> radar_points_;
 
     cv::Mat prev_frame_;
     cv::Mat curr_frame_;

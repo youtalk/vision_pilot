@@ -105,7 +105,7 @@ InferencePipeline::InferencePipeline(engine::OnnxEngine& engine, const Config& c
         backend_ = std::make_unique<SplitBackend>(engine, cfg.precision);
     }
 
-    fusion::LongitudinalFusion::Config lc;
+    fusion::LongitudinalFusion::Config lc = cfg.long_fusion;
     lc.debug           = cfg.fusion_debug;
     long_fusion_ = fusion::LongitudinalFusion{lc};
 
@@ -159,7 +159,9 @@ void InferencePipeline::set_H_resized(const cv::Mat& H, cv::Size raw_size)
 }
 
 std::optional<InferenceFrameResult> InferencePipeline::process(const cv::Mat& warped,
-                                                               const cv::Mat& resized)
+                                                               const cv::Mat& resized,
+                                                               float ego_speed_ms,
+                                                               bool has_ego_speed)
 {
     using Clock = std::chrono::steady_clock;
     using Ms    = std::chrono::duration<double, std::milli>;
@@ -232,8 +234,24 @@ std::optional<InferenceFrameResult> InferencePipeline::process(const cv::Mat& wa
     out.auto_drive = r.drive;
     out.auto_steer = r.steer;
     out.auto_speed = r.speed;
-    out.cipo       = long_fusion_.update(r.drive, r.speed, warped);
-    out.lateral    = lat_fusion_.update(r.steer, r.drive);
+
+    out.lateral = lat_fusion_.update(r.steer, r.drive);
+
+    const bool radar_on = long_fusion_.config().radar_enabled;
+    fusion::PathPoly path;
+    if (radar_on && out.lateral.path_valid) {
+        path.valid = true;
+        path.a = out.lateral.path_a;
+        path.b = out.lateral.path_b;
+        path.c = out.lateral.path_c;
+        path.x_max_m = out.lateral.path_x_max_m;
+    }
+    const std::vector<fusion::RadarPoint>* radar_ptr =
+        radar_on ? &radar_points_ : nullptr;
+    const fusion::PathPoly* path_ptr =
+        (radar_on && path.valid) ? &path : nullptr;
+    const float* ego_ptr = has_ego_speed ? &ego_speed_ms : nullptr;
+    out.cipo = long_fusion_.update(r.drive, r.speed, warped, 0.f, radar_ptr, path_ptr, ego_ptr);
 
     stats_.update(ms_pre, r.ad_ms, r.as_ms, r.asp_ms, ms_wall);
     return out;
@@ -252,6 +270,7 @@ void InferencePipeline::reset()
     stats_.reset();
     long_fusion_.reset();
     lat_fusion_.reset();
+    radar_points_.clear();
 }
 
 }  // namespace visionpilot::models
