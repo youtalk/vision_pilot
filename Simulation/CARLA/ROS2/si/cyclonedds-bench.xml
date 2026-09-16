@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Every DDS participant on rog-amd for the CES 2027 demo: the CARLA server
+     (embedded CycloneDDS behind -rmw=cyclonedds), the bridge nodes and
+     VisionPilot when it runs here. Pinned to the bench NIC so nothing ever
+     discovers over WiFi. Domain follows ROS_DOMAIN_ID (1 everywhere). -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="${CARLA_BENCH_IF:-enx00e04c680c75}" priority="default" multicast="true"/>
+      </Interfaces>
+      <AllowMulticast>spdp</AllowMulticast>
+      <MaxMessageSize>65500B</MaxMessageSize>
+    </General>
+    <Internal>
+      <SocketReceiveBufferSize min="8MB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>
