@@ -39,17 +39,26 @@ class EgoStatePublisher(Node):
             self.ego = self.find_ego()
             if self.ego is None:
                 return
-        tf = self.ego.get_transform(); vel = self.ego.get_velocity()
-        x, y, yaw, speed = carla_to_ros(tf.location.x, tf.location.y, tf.rotation.yaw, vel.x, vel.y, vel.z)
-        stamp = self.get_clock().now().to_msg()
-        od = Odometry(); od.header.stamp = stamp; od.header.frame_id = 'map'; od.child_frame_id = 'base_link'
-        od.pose.pose.position.x = x; od.pose.pose.position.y = y; od.pose.pose.position.z = tf.location.z
-        od.pose.pose.orientation.x, od.pose.pose.orientation.y, od.pose.pose.orientation.z, od.pose.pose.orientation.w = yaw_to_quaternion(yaw)
-        od.twist.twist.linear.x = speed
-        self.odom_pub.publish(od)
-        sr = SteeringReport(); sr.stamp = stamp
-        sr.steering_tire_angle = -float(self.ego.get_control().steer) * MAX_STEER_RAD
-        self.steer_pub.publish(sr)
+        try:
+            tf = self.ego.get_transform(); vel = self.ego.get_velocity()
+            x, y, yaw, speed = carla_to_ros(tf.location.x, tf.location.y, tf.rotation.yaw, vel.x, vel.y, vel.z)
+            stamp = self.get_clock().now().to_msg()
+            od = Odometry(); od.header.stamp = stamp; od.header.frame_id = 'map'; od.child_frame_id = 'base_link'
+            od.pose.pose.position.x = x; od.pose.pose.position.y = y; od.pose.pose.position.z = tf.location.z
+            od.pose.pose.orientation.x, od.pose.pose.orientation.y, od.pose.pose.orientation.z, od.pose.pose.orientation.w = yaw_to_quaternion(yaw)
+            od.twist.twist.linear.x = speed
+            self.odom_pub.publish(od)
+            sr = SteeringReport(); sr.stamp = stamp
+            sr.steering_tire_angle = -float(self.ego.get_control().steer) * MAX_STEER_RAD
+            self.steer_pub.publish(sr)
+        except Exception as exc:
+            # The hero actor can be destroyed between the is_alive check above
+            # and these calls (episode reset, actor teardown), and CARLA's
+            # client raises for a dead actor rather than returning stale data.
+            # Drop this tick and re-resolve the actor on the next one instead
+            # of letting the exception kill the rclpy executor.
+            self.get_logger().warning('ego state read failed, will re-resolve actor: %s', exc)
+            self.ego = None
 
 
 def main(args=None):
