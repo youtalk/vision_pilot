@@ -19,5 +19,5 @@ fi
 case "$mode" in
   kill|freeze) ssh "$BOARD" 'systemctl stop x5h-vp.service' ;;
   channel)     ssh "$BOARD" 'systemctl kill -s USR1 x5h-si-link.service' ;;
-esac
+esac || { echo "SI_FAULT_FAIL reason=ssh_failed"; exit 1; }
 echo "SI_FAULT_INJECTED mode=$mode t=$(date +%s.%N)"
