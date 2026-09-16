@@ -7,8 +7,10 @@
 # Markers: CARLA_SERVER sha=<sha> | CARLA_SERVER_UP pid=<pid> | CARLA_SERVER_FAIL reason=<slug>
 set -uo pipefail
 PKG="${1:-}"; [ -n "$PKG" ] || { echo "CARLA_SERVER_FAIL reason=bad_args"; exit 1; }
+# The sha stamp sits at the package root, but the launcher sits one level
+# down under Linux/. Do not "fix" one path to match the other.
 [ -f "$PKG/ces2027-package-sha.txt" ] || { echo "CARLA_SERVER_FAIL reason=no_sha_stamp"; exit 1; }
-[ -x "$PKG/CarlaUnreal.sh" ] || { echo "CARLA_SERVER_FAIL reason=no_launcher"; exit 1; }
+[ -x "$PKG/Linux/CarlaUnreal.sh" ] || { echo "CARLA_SERVER_FAIL reason=no_launcher"; exit 1; }
 
 # CarlaUnreal.sh is a launcher, not necessarily the engine binary: if it forks
 # rather than execs, "kill $pid" leaves the engine alive holding port 2000.
@@ -28,7 +30,7 @@ MAP="${CARLA_MAP:-/Game/Carla/Maps/Town04_Opt}"
 LOG="${CARLA_LOG:-/tmp/carla-server.log}"
 echo "CARLA_SERVER sha=$(cat "$PKG/ces2027-package-sha.txt")"
 if (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; then echo "CARLA_SERVER_FAIL reason=port_2000_busy"; exit 1; fi
-setsid "$PKG/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound --ros2 --rmw=cyclonedds --ros-domain-id=1 \
+setsid "$PKG/Linux/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound --ros2 --rmw=cyclonedds --ros-domain-id=1 \
   -ExecCmds="r.DefaultFeature.AutoExposure 0" > "$LOG" 2>&1 &
 pid=$!
 for _ in $(seq 1 120); do
