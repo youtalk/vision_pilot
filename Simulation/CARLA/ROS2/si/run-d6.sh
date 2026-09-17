@@ -113,10 +113,15 @@ case "$MODE" in
     rc=${PIPESTATUS[0]}
     [ "$rc" -eq 0 ] || fail fault_not_injected ;;
 esac
-docker wait d6-gate > /dev/null; docker logs d6-gate 2>&1 | tee "$LOG/gate.txt"
+# Capture the gate's verdict to LOG/gate.txt only, do not print it yet: a
+# PASS verdict here plus a later no_snaps failure would put two SI_STOP_*
+# lines on stdout, and this plan copies exactly one such line per run into
+# an issue as the record of the gate.
+docker wait d6-gate > /dev/null; docker logs d6-gate > "$LOG/gate.txt" 2>&1
 grep -qE '^SI_STOP_(PASS|FAIL)' "$LOG/gate.txt" || fail gate_no_verdict
 docker wait d6-snap > /dev/null; docker logs d6-snap 2>&1 | tail -1
 [ -n "$(ls -A "$LOG/snaps")" ] || fail no_snaps
+cat "$LOG/gate.txt"
 docker logs d6-bridge > "$LOG/bridge.log" 2>&1
 echo "D6 logs in $LOG"
 grep -q '^SI_STOP_PASS' "$LOG/gate.txt"
