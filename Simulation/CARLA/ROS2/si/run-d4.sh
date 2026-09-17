@@ -24,6 +24,10 @@ cleanup() {
 trap cleanup EXIT
 fail() { echo "D4_LAP_FAIL reason=$1 log=$LOG"; exit 1; }
 
+# VP_SECONDS is handed straight to lap_gate.py's argparse, where a
+# non-numeric value dies with a traceback and no marker at all.
+case "$VP_SECONDS" in ''|*[!0-9]*) fail bad_vp_seconds ;; esac
+
 out=$(bash "$here/run-carla-server.sh" "$PKG"); echo "$out" | tee "$LOG/server.txt"
 grep -q '^CARLA_SERVER_UP' <<<"$out" || fail server
 spid=$(sed -n 's/^CARLA_SERVER_UP pid=//p' <<<"$out")
@@ -32,7 +36,10 @@ CFG_IN_IMAGE=/ws/install/carla_bridge_bringup/share/carla_bridge_bringup/scripts
 # The image on rog-amd cannot be rebuilt there (no visionpilot:gpu-ros2 base),
 # so the changed config_carla.py is mounted over its installed copy.
 # ponytail: bind-mount override; rebuild and re-ship visionpilot:si before the booth.
-DOCKER="docker run -d --net=host --ipc=host --gpus all -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF=${CARLA_BENCH_IF:-enx00e04c680c75} -e CARLA_SUN_ALTITUDE=${CARLA_SUN_ALTITUDE:-} -v $here/../src/carla_bridge_bringup/scripts/config_carla.py:$CFG_IN_IMAGE:ro"
+DOCKER="docker run -d --net=host --ipc=host --gpus all -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF=${CARLA_BENCH_IF:-enx00e04c680c75} -e CARLA_SUN_ALTITUDE=${CARLA_SUN_ALTITUDE:-} -v $here:/ws/si:ro -v $here/../src/carla_bridge_bringup/scripts/config_carla.py:$CFG_IN_IMAGE:ro"
+# CYCLONEDDS_URI points into /ws/si, so mount the host tree over the image's
+# copy the way run-d6.sh does: without it an edit to cyclonedds-bench.xml
+# silently applied to D6 and not to D4.
 # SPAWN_INDEX, not CARLA_SPAWN_INDEX: config_carla.py reads SPAWN_INDEX.
 $DOCKER --name d4-bridge -e SPAWN_INDEX="$SPAWN_INDEX" visionpilot:si \
   "source /ws/install/setup.bash && ros2 launch carla_bridge_bringup carla_bridge.launch.py host:=127.0.0.1 port:=2000 rig_file:=/ws/config/carla10.json" > /dev/null || fail bridge
@@ -60,9 +67,15 @@ for _ in $(seq 1 300); do
   sleep 2
 done
 
+# The gate's stderr goes to a file, not nowhere: the likely raise is
+# world.wait_for_tick timing out because the bridge never came up, and without
+# this the script printed only "D4 logs in ..." and exited with no D4_LAP_ line
+# at all.
 ~/carla-venv/bin/python "$here/lap_gate.py" "$VP_SECONDS" \
-  --max-cte "${MAX_CTE:-1.75}" --min-lap-m "$MIN_LAP_M" --csv "$LOG/lap.csv" | tee "$LOG/gate.txt"
+  --max-cte "${MAX_CTE:-1.75}" --min-lap-m "$MIN_LAP_M" --csv "$LOG/lap.csv" \
+  2> "$LOG/gate.err" | tee "$LOG/gate.txt"
 rc=${PIPESTATUS[0]}
 docker logs d4-vp > "$LOG/vp.log" 2>&1; docker logs d4-bridge > "$LOG/bridge.log" 2>&1
+grep -qE '^D4_LAP_(PASS|FAIL)' "$LOG/gate.txt" || { cat "$LOG/gate.err" >&2; fail gate_no_verdict; }
 echo "D4 logs in $LOG"
 exit "$rc"
