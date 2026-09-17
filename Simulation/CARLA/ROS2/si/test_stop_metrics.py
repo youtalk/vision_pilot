@@ -17,3 +17,9 @@ def test_stop_distance_is_path_length_until_speed_is_zero():
 
 def test_stop_distance_none_when_never_stopped():
     assert s.stop_distance([(10.0, 0.0, 0.0, 5.0), (11.0, 4.0, 0.0, 4.0)], 0.05) == (None, None)
+
+
+def test_first_ramp_after_finds_the_first_braking_ackermann():
+    rows = [(9.0, -0.1), (10.2, 0.4), (10.5, -3.0), (10.7, -3.0)]
+    assert s.first_ramp_after(10.0, rows, 3.0) == (10.5, -3.0)
+    assert s.first_ramp_after(11.0, rows, 3.0) is None
