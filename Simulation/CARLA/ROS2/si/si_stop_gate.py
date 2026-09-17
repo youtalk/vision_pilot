@@ -19,6 +19,10 @@ kill route:
            then adds one 0.15 s control cycle. A kill-route run must be
            gated with --max-latency-ms 700, or a correct run reads as a
            failure.
+
+first_si_ack_ms is the first /carla/hero/ackermann_control_cmd at or below
+-2.5 m/s^2 after the fault, which is the bench arbiter forwarding the CR52
+ramp instead of VisionPilot's pair (arbiter.py choose_source).
 """
 import argparse
 import sys
@@ -27,21 +31,26 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from autoware_control_msgs.msg import Control
-from stop_metrics import first_after, stop_distance
+from ackermann_msgs.msg import AckermannDriveStamped
+from stop_metrics import first_after, first_ramp_after, stop_distance
 
 
 class Gate(Node):
     def __init__(self, t_fault):
         super().__init__("si_stop_gate")
-        self.t_fault = t_fault; self.raw_stamps = []; self.rows = []
+        self.t_fault = t_fault; self.raw_stamps = []; self.rows = []; self.ack = []
         self.create_subscription(Control, "/control/trajectory_follower/control_cmd_raw", self.on_raw, 10)
         self.create_subscription(Odometry, "/localization/kinematic_state", self.on_odom, 10)
+        self.create_subscription(AckermannDriveStamped, "/carla/hero/ackermann_control_cmd", self.on_ack, 10)
 
     def on_raw(self, _msg):
         self.raw_stamps.append(time.time())
 
     def on_odom(self, m):
         self.rows.append((time.time(), m.pose.pose.position.x, m.pose.pose.position.y, m.twist.twist.linear.x))
+
+    def on_ack(self, m):
+        self.ack.append((time.time(), float(m.drive.acceleration)))
 
 
 def main():
@@ -58,10 +67,14 @@ def main():
     latency_ms = (t_first - a.fault_at) * 1000.0
     if latency_ms > a.max_latency_ms:
         print(f"SI_STOP_FAIL reason=cmd_late first_cr52_cmd_ms={latency_ms:.0f}"); return 1
+    sw = first_ramp_after(a.fault_at, g.ack, 3.0)
+    if sw is None:
+        print(f"SI_STOP_FAIL reason=arbiter_never_switched first_cr52_cmd_ms={latency_ms:.0f}"); return 1
+    ack_ms = (sw[0] - a.fault_at) * 1000.0
     d, t_stop = stop_distance([r for r in g.rows if r[0] >= a.fault_at], 0.05)
     if d is None:
         print(f"SI_STOP_FAIL reason=no_stop first_cr52_cmd_ms={latency_ms:.0f}"); return 1
-    print(f"SI_STOP_PASS first_cr52_cmd_ms={latency_ms:.0f} stop_distance_m={d:.2f} stop_s={t_stop - a.fault_at:.2f}"); return 0
+    print(f"SI_STOP_PASS first_cr52_cmd_ms={latency_ms:.0f} first_si_ack_ms={ack_ms:.0f} stop_distance_m={d:.2f} stop_s={t_stop - a.fault_at:.2f}"); return 0
 
 
 if __name__ == "__main__":
