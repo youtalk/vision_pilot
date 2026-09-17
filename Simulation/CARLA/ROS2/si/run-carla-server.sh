@@ -31,10 +31,15 @@ export ROS_DOMAIN_ID=1
 DDS_PORT=$((7400 + 250 * ROS_DOMAIN_ID))
 ros2_port_bound() { ss -unap 2>/dev/null | grep ":$1 " | grep -q CarlaUnreal; }
 MAP="${CARLA_MAP:-/Game/Carla/Maps/Town04_Opt}"
+# rog-amd has an 8 GB RTX 4070 Laptop GPU. At the default quality Town04_Opt sits
+# at the edge of that, and startup dies by SIGKILL with nothing in the log. Low
+# peaks at about 4.9 GB and starts reliably. Raise it only on a bigger GPU.
+QUALITY="${CARLA_QUALITY:-Low}"
 LOG="${CARLA_LOG:-/tmp/carla-server.log}"
 echo "CARLA_SERVER sha=$(cat "$PKG/ces2027-package-sha.txt")"
 if (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; then echo "CARLA_SERVER_FAIL reason=port_2000_busy"; exit 1; fi
-setsid "$PKG/Linux/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound --ros2 --rmw=cyclonedds --ros-domain-id=1 \
+setsid "$PKG/Linux/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound -quality-level="$QUALITY" \
+  --ros2 --rmw=cyclonedds --ros-domain-id=1 \
   -ExecCmds="r.DefaultFeature.AutoExposure 0" > "$LOG" 2>&1 &
 pid=$!
 for _ in $(seq 1 120); do
