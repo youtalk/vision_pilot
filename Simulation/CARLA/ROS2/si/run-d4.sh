@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate D4 on rog-amd: VisionPilot drives Town04_Opt unaided.
+# Gate D4 (reworded 2026-09-17): one closed lap of the spawn-5 loop at 12 m/s, |cte| < 1.75 m.
 #   run-d4.sh <package-dir>
 # Everything ROS 2 runs in the visionpilot:si image on the host network with the
 # bench CycloneDDS configuration; the lap gate runs in the host venv.
@@ -28,7 +28,11 @@ out=$(bash "$here/run-carla-server.sh" "$PKG"); echo "$out" | tee "$LOG/server.t
 grep -q '^CARLA_SERVER_UP' <<<"$out" || fail server
 spid=$(sed -n 's/^CARLA_SERVER_UP pid=//p' <<<"$out")
 
-DOCKER="docker run -d --net=host --ipc=host --gpus all -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF=${CARLA_BENCH_IF:-enx00e04c680c75}"
+CFG_IN_IMAGE=/ws/install/carla_bridge_bringup/share/carla_bridge_bringup/scripts/config_carla.py
+# The image on rog-amd cannot be rebuilt there (no visionpilot:gpu-ros2 base),
+# so the changed config_carla.py is mounted over its installed copy.
+# ponytail: bind-mount override; rebuild and re-ship visionpilot:si before the booth.
+DOCKER="docker run -d --net=host --ipc=host --gpus all -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF=${CARLA_BENCH_IF:-enx00e04c680c75} -e CARLA_SUN_ALTITUDE=${CARLA_SUN_ALTITUDE:-} -v $here/../src/carla_bridge_bringup/scripts/config_carla.py:$CFG_IN_IMAGE:ro"
 # SPAWN_INDEX, not CARLA_SPAWN_INDEX: config_carla.py reads SPAWN_INDEX.
 $DOCKER --name d4-bridge -e SPAWN_INDEX="$SPAWN_INDEX" visionpilot:si \
   "source /ws/install/setup.bash && ros2 launch carla_bridge_bringup carla_bridge.launch.py host:=127.0.0.1 port:=2000 rig_file:=/ws/config/carla10.json" > /dev/null || fail bridge
@@ -57,7 +61,7 @@ for _ in $(seq 1 300); do
 done
 
 ~/carla-venv/bin/python "$here/lap_gate.py" "$VP_SECONDS" \
-  --min-lap-m "$(awk -v m="$LAP_M" 'BEGIN { print m * 0.8 }')" --csv "$LOG/lap.csv" | tee "$LOG/gate.txt"
+  --max-cte "${MAX_CTE:-1.75}" --min-lap-m "$MIN_LAP_M" --csv "$LOG/lap.csv" | tee "$LOG/gate.txt"
 rc=${PIPESTATUS[0]}
 docker logs d4-vp > "$LOG/vp.log" 2>&1; docker logs d4-bridge > "$LOG/bridge.log" 2>&1
 echo "D4 logs in $LOG"
