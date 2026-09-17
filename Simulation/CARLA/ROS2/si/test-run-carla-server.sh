@@ -25,4 +25,5 @@ PATH="$tmp/bin:$PATH"
 ros2_port_bound 7650 || fail port_bound_missed
 ros2_port_bound 7400 && fail foreign_process_accepted
 ros2_port_bound 765 && fail port_prefix_matched
+grep -q 'AutoExposure ${CARLA_AUTOEXPOSURE:-0}' "$s" || fail autoexposure_knob
 echo "TEST_PASS test-run-carla-server"
