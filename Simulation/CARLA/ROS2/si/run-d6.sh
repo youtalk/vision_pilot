@@ -30,13 +30,21 @@ esac
 
 # shellcheck disable=SC2329  # runs from the EXIT trap below
 cleanup() {
-  docker rm -f d6-bridge d6-vp d6-snap d6-gate > /dev/null 2>&1
+  docker rm -f d6-bridge d6-vp d6-snap d6-gate d6-standin > /dev/null 2>&1
   [ -n "${sipid:-}" ] && kill "$sipid" 2>/dev/null
   [ -n "${spid:-}" ] && kill -- -"$spid" 2>/dev/null
   pkill -9 CarlaUnreal-Lin 2>/dev/null
 }
 trap cleanup EXIT
 fail() { echo "SI_STOP_FAIL reason=$1 log=$LOG"; exit 1; }
+
+# DRIVE_S must be a bare non-negative integer with a floor of 20 s: the v0
+# sample below lands 12 s before FAULT_AT, so anything shorter leaves no
+# driving time before that sample. Left unchecked, a non-numeric value
+# dies later with no marker, a fractional value skips a `|| fail` branch
+# silently, and a value of 0 or less can produce a false PASS.
+case "$DRIVE_S" in ''|*[!0-9]*) fail bad_drive_s ;; esac
+[ "$DRIVE_S" -ge 20 ] || fail bad_drive_s
 
 out=$(bash "$here/run-carla-server.sh" "$PKG"); echo "$out" | tee "$LOG/server.txt"
 grep -q '^CARLA_SERVER_UP' <<<"$out" || fail server
@@ -78,24 +86,37 @@ $DOCKER --name d6-gate visionpilot:si "source /ws/install/setup.bash && python3 
 $DOCKER --name d6-snap visionpilot:si "source /ws/install/setup.bash && python3 /ws/si/snap.py /snaps --seconds $((DRIVE_S + 40))" > /dev/null || fail snap
 case "$MODE" in
   standin)
-    # v0 from the ego-state publisher's odometry, one sample, taken DURING
-    # the drive window (not after FAULT_AT — the sample, the container
-    # removal and the stand-in's cold start all have to fit before the fault).
+    # v0 has to be sampled LATE in the drive window, not at the top of it.
+    # The d6-vp readiness loop above breaks on VisionPilot's first
+    # [Lateral] line, when the ego has barely started moving, and
+    # /localization/kinematic_state publishes at 20 Hz from bridge start
+    # whether the car is moving or not. A v0 near 0 makes the stand-in's
+    # ramp() return 0 for every t, so it reads as an instant stop instead
+    # of imitating the -3 m/s^2 profile. Wait until 12 s before FAULT_AT
+    # (the sample's own 10 s timeout needs that room) so the ego is at
+    # cruise speed first.
+    sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n - 12; print (d > 0) ? d : 0 }')"
+    # v0 from the ego-state publisher's odometry, one sample.
     v0=$(docker run --rm --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
       "source /ws/install/setup.bash && timeout 10 ros2 topic echo --once /localization/kinematic_state --field twist.twist.linear.x" | tr -d '\r' | tail -1)
+    [ -n "$v0" ] || fail no_v0
     # Wait for FAULT_AT itself (si_fault.sh's own idiom) before "failing"
     # VisionPilot, so the fault instant means the same thing in every mode.
     sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n; print (d > 0) ? d : 0 }')"
     docker rm -f d6-vp > /dev/null 2>&1      # VisionPilot "fails"
     echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT v0=$v0"
-    docker run --rm --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
+    docker run --rm --name d6-standin --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
       "source /ws/install/setup.bash && python3 /ws/si/si_standin.py --v0 $v0" > "$LOG/standin.log" 2>&1 &
     sipid=$! ;;
   kill|channel)
-    bash "$here/si_fault.sh" "$MODE" "$FAULT_AT" | tee "$LOG/fault.txt" ;;
+    bash "$here/si_fault.sh" "$MODE" "$FAULT_AT" | tee "$LOG/fault.txt"
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] || fail fault_not_injected ;;
 esac
 docker wait d6-gate > /dev/null; docker logs d6-gate 2>&1 | tee "$LOG/gate.txt"
+grep -qE '^SI_STOP_(PASS|FAIL)' "$LOG/gate.txt" || fail gate_no_verdict
 docker wait d6-snap > /dev/null; docker logs d6-snap 2>&1 | tail -1
+[ -n "$(ls -A "$LOG/snaps")" ] || fail no_snaps
 docker logs d6-bridge > "$LOG/bridge.log" 2>&1
 echo "D6 logs in $LOG"
 grep -q '^SI_STOP_PASS' "$LOG/gate.txt"
