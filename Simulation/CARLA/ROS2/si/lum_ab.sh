@@ -23,12 +23,14 @@ stop_all() {
 trap stop_all EXIT
 
 # probe <case> : the ego rig is already walking; sample 50 frames on domain 1.
+# The sed tags LUMINANCE_FAIL too: it has no space after LUMINANCE, so the old
+# pattern left a failed probe's line untagged and ambiguous across four cases.
 probe() {
   docker run --rm --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
     -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="$CARLA_BENCH_IF" \
     -v "$here:/ws/si:ro" -v "$OUT:/out" "$IMG" \
     "source /ws/install/setup.bash && python3 /ws/si/luminance_probe.py --frames 50 --ppm /out/$1.ppm" \
-    | sed "s/^LUMINANCE /LUMINANCE case=$1 /" | tee -a "$OUT/results.txt"
+    | sed -E "s/^(LUMINANCE(_FAIL)?) /\\1 case=$1 /" | tee -a "$OUT/results.txt"
 }
 
 # walk <sun-or-empty> : start lane_walk.py with or without the sun. It spawns
@@ -37,14 +39,14 @@ walk() {
   CARLA_SUN_ALTITUDE="$1" ~/carla-venv/bin/python "$here/lane_walk.py" 400 8.0 > "$OUT/walk-$2.log" 2>&1 &
   wpid=$!
   for _ in $(seq 1 60); do n=$(grep -c '^WALK ego=' "$OUT/walk-$2.log" || true); [ "${n:-0}" -gt 0 ] && return 0; sleep 1; done
-  echo "LUMINANCE_FAIL case=$2 reason=walk"; return 1
+  echo "LUMINANCE_FAIL case=$2 reason=walk" | tee -a "$OUT/results.txt"; return 1
 }
 
 # server <quality> <autoexposure> <case> : each case keeps its own server log
 # (CARLA_LOG), since the default /tmp/carla-server.log would otherwise be
 # overwritten by the next case's server before anyone reads it.
 server() {
-  out=$(CARLA_QUALITY="$1" CARLA_AUTOEXPOSURE="$2" CARLA_LOG="$OUT/carla-$3.log" bash "$here/run-carla-server.sh" "$PKG") || { echo "$out"; echo "LUMINANCE_FAIL case=$3 reason=server"; return 1; }
+  out=$(CARLA_QUALITY="$1" CARLA_AUTOEXPOSURE="$2" CARLA_LOG="$OUT/carla-$3.log" bash "$here/run-carla-server.sh" "$PKG") || { echo "$out"; echo "LUMINANCE_FAIL case=$3 reason=server" | tee -a "$OUT/results.txt"; return 1; }
   spid=$(sed -n 's/^CARLA_SERVER_UP pid=//p' <<<"$out")
 }
 
@@ -58,7 +60,10 @@ server Low 0 low-nosun-ae0
 server_a_up=$?
 if [ "$server_a_up" -eq 0 ]; then
   walk "" low-nosun-ae0 && probe low-nosun-ae0
-  [ -n "${wpid:-}" ] && kill "$wpid" 2>/dev/null; wpid=
+  # Same settle as stop_all. Actor destruction is asynchronous, so without it
+  # the second walk hits the still-present hero on spawn point 5 and burns 60 s
+  # to report reason=walk.
+  [ -n "${wpid:-}" ] && kill "$wpid" 2>/dev/null; wpid=; sleep 3
   walk 70 low-sun70-ae0 && probe low-sun70-ae0
 fi
 stop_all
