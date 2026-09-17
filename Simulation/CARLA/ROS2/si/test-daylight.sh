@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The sun is opt-in: no CARLA_SUN_ITUDE, no set_weather call. Both the bridge's
+# The sun is opt-in: no CARLA_SUN_ALTITUDE, no set_weather call. Both the bridge's
 # config_carla.py and the perception walk must follow the same rule, and the
 # old unconditional default of 70 degrees must be gone.
 set -u
