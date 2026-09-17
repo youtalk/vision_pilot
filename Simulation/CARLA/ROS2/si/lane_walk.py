@@ -75,8 +75,18 @@ try:
 
     print("WALK steps=%d distance_m=%.1f" % (steps, steps * SPEED * DT), flush=True)
 finally:
+    # A destroy call can itself raise, for example when the server already
+    # tore the actor down. Swallow that here so it cannot replace a real
+    # error from the walk above, and so one actor's failed cleanup does not
+    # stop the other actor from being destroyed.
     if cam is not None:
-        cam.stop(); cam.destroy()
+        try:
+            cam.stop(); cam.destroy()
+        except Exception:
+            pass
     if veh is not None:
-        veh.destroy()
+        try:
+            veh.destroy()
+        except Exception:
+            pass
 print("WALK done", flush=True)
