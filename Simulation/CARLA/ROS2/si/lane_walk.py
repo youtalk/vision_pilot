@@ -75,18 +75,18 @@ try:
 
     print("WALK steps=%d distance_m=%.1f" % (steps, steps * SPEED * DT), flush=True)
 finally:
-    # A destroy call can itself raise, for example when the server already
-    # tore the actor down. Swallow that here so it cannot replace a real
-    # error from the walk above, and so one actor's failed cleanup does not
-    # stop the other actor from being destroyed.
+    # A failed cleanup must not mask a real walk error, but it must not be
+    # silent either: lum_ab.sh restarts this walk inside one server, and a
+    # leaked actor blocks the next spawn.
+    def _cleanup(label, fn):
+        try:
+            fn()
+        except Exception as exc:
+            print("WALK cleanup_failed %s: %s" % (label, exc), flush=True)
+
     if cam is not None:
-        try:
-            cam.stop(); cam.destroy()
-        except Exception:
-            pass
+        _cleanup("cam.stop", cam.stop)
+        _cleanup("cam.destroy", cam.destroy)
     if veh is not None:
-        try:
-            veh.destroy()
-        except Exception:
-            pass
+        _cleanup("veh.destroy", veh.destroy)
 print("WALK done", flush=True)
