@@ -29,6 +29,20 @@ class EgoStatePublisher(Node):
         self.create_timer(0.05, self.tick)
 
     def find_ego(self):
+        # config_carla.py holds the world in synchronous mode and drives the clock
+        # itself, so this passive client receives no snapshot until it waits for
+        # one. Until then get_actors() returns an empty list rather than raising,
+        # and the ego reads as if it was never spawned. One seeding wait is enough:
+        # snapshots then keep arriving on their own at the simulation rate, which
+        # is why the timer below can stay a plain timer. Measured on Town04_Opt at
+        # fixed_delta_seconds 0.1: 0 actors before the wait, 126 after, and the
+        # frame number then advances without any further wait.
+        # The wait is short and only happens while there is no ego to publish, so
+        # it cannot stall the executor during normal operation.
+        try:
+            self.world.wait_for_tick(seconds=1.0)
+        except RuntimeError:
+            return None  # nothing is ticking yet; the next timer call retries
         for actor in self.world.get_actors().filter('vehicle.*'):
             if actor.attributes.get('role_name') == 'hero':
                 return actor
