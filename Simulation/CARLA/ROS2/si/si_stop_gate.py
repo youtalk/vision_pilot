@@ -23,6 +23,9 @@ kill route:
 first_si_ack_ms is the first /carla/hero/ackermann_control_cmd at or below
 -2.5 m/s^2 after the fault, which is the bench arbiter forwarding the CR52
 ramp instead of VisionPilot's pair (arbiter.py choose_source).
+
+The decision itself is stop_metrics.verdict(), which is pure and tested; this
+module only collects the samples and prints what it returns.
 """
 import argparse
 import sys
@@ -32,7 +35,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from autoware_control_msgs.msg import Control
 from ackermann_msgs.msg import AckermannDriveStamped
-from stop_metrics import first_after, first_ramp_after, stop_distance
+from stop_metrics import verdict
 
 
 class Gate(Node):
@@ -61,20 +64,9 @@ def main():
     end = a.fault_at + a.window
     while time.time() < end:
         rclpy.spin_once(g, timeout_sec=0.1)
-    t_first = first_after(a.fault_at, g.raw_stamps)
-    if t_first is None:
-        print("SI_STOP_FAIL reason=no_cr52_cmd"); return 1
-    latency_ms = (t_first - a.fault_at) * 1000.0
-    if latency_ms > a.max_latency_ms:
-        print(f"SI_STOP_FAIL reason=cmd_late first_cr52_cmd_ms={latency_ms:.0f}"); return 1
-    sw = first_ramp_after(a.fault_at, g.ack, 3.0)
-    if sw is None:
-        print(f"SI_STOP_FAIL reason=arbiter_never_switched first_cr52_cmd_ms={latency_ms:.0f}"); return 1
-    ack_ms = (sw[0] - a.fault_at) * 1000.0
-    d, t_stop = stop_distance([r for r in g.rows if r[0] >= a.fault_at], 0.05)
-    if d is None:
-        print(f"SI_STOP_FAIL reason=no_stop first_cr52_cmd_ms={latency_ms:.0f}"); return 1
-    print(f"SI_STOP_PASS first_cr52_cmd_ms={latency_ms:.0f} first_si_ack_ms={ack_ms:.0f} stop_distance_m={d:.2f} stop_s={t_stop - a.fault_at:.2f}"); return 0
+    line = verdict(a.fault_at, g.raw_stamps, g.ack, g.rows, a.max_latency_ms)
+    print(line)
+    return 0 if line.startswith("SI_STOP_PASS") else 1
 
 
 if __name__ == "__main__":
