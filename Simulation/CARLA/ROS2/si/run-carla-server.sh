@@ -35,12 +35,15 @@ MAP="${CARLA_MAP:-/Game/Carla/Maps/Town04_Opt}"
 # at the edge of that, and startup dies by SIGKILL with nothing in the log. Low
 # peaks at about 4.9 GB and starts reliably. Raise it only on a bigger GPU.
 QUALITY="${CARLA_QUALITY:-Low}"
+# Auto exposure is off by default (the value the 2026-09-16 runs used). The
+# lighting A/B sets CARLA_AUTOEXPOSURE=1 to see whether the engine's own
+# metering removes the blown-out frame that a raised sun produced.
 LOG="${CARLA_LOG:-/tmp/carla-server.log}"
 echo "CARLA_SERVER sha=$(cat "$PKG/ces2027-package-sha.txt")"
 if (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; then echo "CARLA_SERVER_FAIL reason=port_2000_busy"; exit 1; fi
 setsid "$PKG/Linux/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound -quality-level="$QUALITY" \
   --ros2 --rmw=cyclonedds --ros-domain-id=1 \
-  -ExecCmds="r.DefaultFeature.AutoExposure 0" > "$LOG" 2>&1 &
+  -ExecCmds="r.DefaultFeature.AutoExposure ${CARLA_AUTOEXPOSURE:-0}" > "$LOG" 2>&1 &
 pid=$!
 for _ in $(seq 1 120); do
   if (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; then

@@ -211,21 +211,18 @@ def main(args):
 
         world = client.get_world()
 
-        # Town04_Opt ships dark and VisionPilot cannot see lane markings without
-        # daylight. The plan originally baked daytime lighting into the map with
-        # an Unreal tool, but that tool's sun-intensity write does not persist on
-        # UE 5.8 and it cannot reach the map's SkyLight, so daylight is set here
-        # at run time instead. CARLA_SUN_ALTITUDE overrides the default so this
-        # is tunable per run without rebuilding anything.
-        sun_altitude = float(os.environ.get("CARLA_SUN_ALTITUDE", "70.0"))
-        world.set_weather(carla.WeatherParameters(
-            sun_altitude_angle=sun_altitude,
-            sun_azimuth_angle=0.0,
-            cloudiness=10.0,
-            precipitation=0.0,
-            fog_density=0.0,
-        ))
-        logging.info("weather: sun_altitude_angle=%.1f (override with CARLA_SUN_ALTITUDE)", sun_altitude)
+        # The sun is opt-in. The workstation runs of 2026-09-10 never called
+        # set_weather and Town04_Opt measured 166-196/255 mean luminance; a 70 deg
+        # sun added on every rog-amd run blew the HUD out. CARLA_SUN_ALTITUDE
+        # raises the sun for one run without rebuilding anything.
+        sun = os.environ.get("CARLA_SUN_ALTITUDE")
+        if sun:
+            world.set_weather(carla.WeatherParameters(
+                sun_altitude_angle=float(sun), sun_azimuth_angle=0.0,
+                cloudiness=10.0, precipitation=0.0, fog_density=0.0))
+            logging.info("weather: sun_altitude_angle=%s (CARLA_SUN_ALTITUDE)", sun)
+        else:
+            logging.info("weather: untouched (set CARLA_SUN_ALTITUDE to raise the sun)")
 
         # Synchronous mode: this client explicitly drives the sim clock via world.tick(),
         # so each step advances by exactly fixed_delta_seconds. This removes the
