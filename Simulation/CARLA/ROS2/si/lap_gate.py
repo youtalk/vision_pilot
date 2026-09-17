@@ -14,6 +14,11 @@ from lap_geom import LapTracker, signed_cte
 
 
 def find_hero(world):
+    # config_carla.py holds the world in synchronous mode and drives the clock
+    # itself (config_carla.py:237). A passive client gets no world snapshot until
+    # it waits for one, and until then get_actors() returns an empty list rather
+    # than raising, so the caller's "while hero is None" loop never ends.
+    world.wait_for_tick(seconds=30.0)
     for a in world.get_actors().filter("vehicle.*"):
         if a.attributes.get("role_name") == "hero":
             return a
@@ -50,7 +55,10 @@ def main():
                 print(f"D4_LAP_FAIL reason=stalled at_m={lap.travelled_m:.1f} max_cte_m={max_cte:.2f}"); return 1
             if lap.update(tf.location.x, tf.location.y):
                 print(f"D4_LAP_PASS lap_m={lap.travelled_m:.1f} max_cte_m={max_cte:.2f} samples={n}"); return 0
-            time.sleep(0.1)
+            # One sample per simulation step, which is the 10 Hz the docstring
+            # promises at fixed_delta_seconds 0.1. time.sleep() would resample the
+            # same stale snapshot, because a passive client only updates on a tick.
+            world.wait_for_tick(seconds=30.0)
     print(f"D4_LAP_FAIL reason=timeout at_m={lap.travelled_m:.1f} max_cte_m={max_cte:.2f}"); return 1
 
 
