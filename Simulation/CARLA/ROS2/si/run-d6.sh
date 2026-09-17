@@ -97,9 +97,16 @@ case "$MODE" in
     # cruise speed first.
     sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n - 12; print (d > 0) ? d : 0 }')"
     # v0 from the ego-state publisher's odometry, one sample.
+    # ros2 topic echo prints the value AND a "---" separator: a float field has
+    # no __slots__, so ros2topic falls through to print(submsg, end="\n---\n").
+    # tail -1 therefore always returned the separator, si_standin.py died in
+    # argparse into a log nobody reads, and the run blamed the CR52 for a
+    # string-parsing bug. Take the last line that looks like a number, then
+    # check its shape so a bad sample names itself.
     v0=$(docker run --rm --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
-      "source /ws/install/setup.bash && timeout 10 ros2 topic echo --once /localization/kinematic_state --field twist.twist.linear.x" | tr -d '\r' | tail -1)
+      "source /ws/install/setup.bash && timeout 10 ros2 topic echo --once /localization/kinematic_state --field twist.twist.linear.x" | tr -d '\r' | awk '/^-?[0-9]/ { v = $0 } END { print v }')
     [ -n "$v0" ] || fail no_v0
+    awk -v v="$v0" 'BEGIN { exit !(v ~ /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$/) }' || fail bad_v0
     # Wait for FAULT_AT itself (si_fault.sh's own idiom) before "failing"
     # VisionPilot, so the fault instant means the same thing in every mode.
     sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n; print (d > 0) ? d : 0 }')"
@@ -113,15 +120,18 @@ case "$MODE" in
     rc=${PIPESTATUS[0]}
     [ "$rc" -eq 0 ] || fail fault_not_injected ;;
 esac
-# Capture the gate's verdict to LOG/gate.txt only, do not print it yet: a
-# PASS verdict here plus a later no_snaps failure would put two SI_STOP_*
-# lines on stdout, and this plan copies exactly one such line per run into
-# an issue as the record of the gate.
+# This plan copies exactly one SI_STOP_ line per run into an issue as the
+# record of the gate, so only one reaches stdout. Which one: the gate's own
+# verdict whenever it is a FAIL, because it names the real cause. no_snaps
+# overrides a PASS only, since a pass with no evidence is not a pass.
 docker wait d6-gate > /dev/null; docker logs d6-gate > "$LOG/gate.txt" 2>&1
-grep -qE '^SI_STOP_(PASS|FAIL)' "$LOG/gate.txt" || fail gate_no_verdict
+verdict=$(awk '/^SI_STOP_(PASS|FAIL)/ { v = $0 } END { print v }' "$LOG/gate.txt")
+[ -n "$verdict" ] || fail gate_no_verdict
 docker wait d6-snap > /dev/null; docker logs d6-snap 2>&1 | tail -1
-[ -n "$(ls -A "$LOG/snaps")" ] || fail no_snaps
-cat "$LOG/gate.txt"
+case "$verdict" in
+  SI_STOP_PASS*) [ -n "$(ls -A "$LOG/snaps")" ] || fail no_snaps ;;
+esac
+echo "$verdict"
 docker logs d6-bridge > "$LOG/bridge.log" 2>&1
 echo "D6 logs in $LOG"
-grep -q '^SI_STOP_PASS' "$LOG/gate.txt"
+case "$verdict" in SI_STOP_PASS*) exit 0 ;; *) exit 1 ;; esac
