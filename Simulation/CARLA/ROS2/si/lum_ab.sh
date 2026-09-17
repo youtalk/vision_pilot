@@ -50,10 +50,17 @@ server() {
 
 : > "$OUT/results.txt"
 # Server A: Low, auto exposure off. nosun first, then the sun: the weather
-# persists in the world, so the order inside one server matters.
-server Low 0 low-nosun-ae0 && walk "" low-nosun-ae0 && probe low-nosun-ae0
-kill "${wpid:-}" 2>/dev/null; wpid=
-walk 70 low-sun70-ae0 && probe low-sun70-ae0
+# persists in the world, so the order inside one server matters. The sun
+# case runs only if this server came up. Without that check, a failed
+# server here still let the sun case run, wait out lane_walk.py's CARLA
+# timeout, and print reason=walk, a marker that names the wrong cause.
+server Low 0 low-nosun-ae0
+server_a_up=$?
+if [ "$server_a_up" -eq 0 ]; then
+  walk "" low-nosun-ae0 && probe low-nosun-ae0
+  [ -n "${wpid:-}" ] && kill "$wpid" 2>/dev/null; wpid=
+  walk 70 low-sun70-ae0 && probe low-sun70-ae0
+fi
 stop_all
 # Server B: Low, auto exposure on, no sun.
 server Low 1 low-nosun-ae1 && walk "" low-nosun-ae1 && probe low-nosun-ae1
