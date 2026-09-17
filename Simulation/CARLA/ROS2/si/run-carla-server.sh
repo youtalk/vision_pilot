@@ -26,6 +26,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 export CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}"
 export CYCLONEDDS_URI="file://$here/cyclonedds-bench.xml"
 export ROS_DOMAIN_ID=1
+# CycloneDDS binds 7400 + 250 * domain for SPDP multicast discovery. The server
+# opens it only when ROS 2 really started, so it is the go/no-go signal below.
+DDS_PORT=$((7400 + 250 * ROS_DOMAIN_ID))
+ros2_port_bound() { ss -unap 2>/dev/null | grep ":$1 " | grep -q CarlaUnreal; }
 MAP="${CARLA_MAP:-/Game/Carla/Maps/Town04_Opt}"
 LOG="${CARLA_LOG:-/tmp/carla-server.log}"
 echo "CARLA_SERVER sha=$(cat "$PKG/ces2027-package-sha.txt")"
@@ -35,13 +39,13 @@ setsid "$PKG/Linux/CarlaUnreal.sh" "$MAP" -RenderOffScreen -nosound --ros2 --rmw
 pid=$!
 for _ in $(seq 1 120); do
   if (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; then
-    # The log is block-buffered (stdout redirected to a file), so the ROS2
-    # line can be written but not yet flushed the instant port 2000 opens.
-    # Poll for up to 10s instead of checking once, so a slow flush is not
-    # mistaken for a real absence.
+    # Do NOT grep the log for "ROS2: enabled with middleware ...". CarlaEngine.cpp
+    # emits that at UE_LOG Log verbosity, which a Shipping build strips, so the
+    # packaged server can never print it and that check can never pass.
+    # The bound SPDP port is a runtime fact that survives the strip.
     ros2_ok=
     for _ in $(seq 1 10); do
-      grep -q "ROS2: enabled with middleware 'cyclonedds'" "$LOG" 2>/dev/null && { ros2_ok=1; break; }
+      ros2_port_bound "$DDS_PORT" && { ros2_ok=1; break; }
       sleep 1
     done
     [ -n "$ros2_ok" ] || { stop_server "$pid"; echo "CARLA_SERVER_FAIL reason=ros2_not_enabled"; exit 1; }
