@@ -19,3 +19,12 @@ def stop_distance(rows, stop_speed):
         if v <= stop_speed:
             return d, t
     return None, None
+
+
+def first_ramp_after(t0, rows, decel):
+    """rows: (t, accel) of /carla/hero/ackermann_control_cmd. The first command at or
+    below -decel (with 0.5 m/s^2 slack) after t0 is the arbiter forwarding the ramp."""
+    for t, a in rows:
+        if t >= t0 and a <= -decel + 0.5:
+            return t, a
+    return None
