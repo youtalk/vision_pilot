@@ -111,7 +111,9 @@ case "$MODE" in
     # VisionPilot, so the fault instant means the same thing in every mode.
     sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n; print (d > 0) ? d : 0 }')"
     docker rm -f d6-vp > /dev/null 2>&1      # VisionPilot "fails"
-    echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT v0=$v0"
+    # t= is the instant the gate measures from (--fault-at) in every mode;
+    # fired= is when the fault actually landed. si_fault.sh prints the same pair.
+    echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT fired=$(date +%s.%N) v0=$v0"
     docker run --rm --name d6-standin --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
       "source /ws/install/setup.bash && python3 /ws/si/si_standin.py --v0 $v0" > "$LOG/standin.log" 2>&1 &
     sipid=$! ;;
