@@ -74,3 +74,16 @@ several times and then fail, which makes the fault look like something else.
 
 `run-carla-server.sh` therefore passes `-quality-level=Low`, measured at a peak of about 4.9 GB. Set `CARLA_QUALITY` to
 raise it on a larger GPU.
+
+Low quality changes what the camera renders, so lane detection was re-baselined against it on 2026-09-16:
+
+```
+LANE_BASELINE cycles=1785 fits=1785 fit_rate=1.000 median_pts=33 median_abs_cte_m=0.01
+```
+
+Lane detection is unaffected. Every cycle fits a lane path, and the measured cross-track error agrees with the ego's
+true position to 0.01 m, which also confirms the rig homography. Take the measurement again with
+`lane_baseline.sh <package-dir>` after any change to the camera rig, the map or the quality level.
+
+Measure it with the ego moving. `lane_baseline.sh` walks the ego along the lane centre for that reason. A parked ego at
+spawn index 5 fits a lane path in only 2.4% of cycles, which reads as broken perception and is not.
