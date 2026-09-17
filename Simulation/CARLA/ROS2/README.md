@@ -61,3 +61,12 @@ interface rather than `lo`. So this rule is needed even when the server and the 
 
 To make sure that the path works, run `ros2 topic list` from a `--net=host` container on domain 1. Use a small `rclpy`
 script instead if the CLI hangs, which it does on this host.
+
+### GPU memory on the bench host
+
+`rog-amd` has an 8 GB RTX 4070 Laptop GPU. At the default quality, Town04_Opt sits at the edge of that budget and the
+server dies during startup by SIGKILL, with no Vulkan or allocation error in the log. The same command can succeed
+several times and then fail, which makes the fault look like something else.
+
+`run-carla-server.sh` therefore passes `-quality-level=Low`, measured at a peak of about 4.9 GB. Set `CARLA_QUALITY` to
+raise it on a larger GPU.
