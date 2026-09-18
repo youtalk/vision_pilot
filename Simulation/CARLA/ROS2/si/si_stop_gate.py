@@ -59,6 +59,11 @@ class Gate(Node):
 def main():
     p = argparse.ArgumentParser(); p.add_argument("--fault-at", type=float, required=True)
     p.add_argument("--window", type=float, default=30.0); p.add_argument("--max-latency-ms", type=float, default=200.0)
+    # The marker line carries a mean deceleration, which cannot tell a vehicle
+    # that brakes weakly from the first instant apart from one whose braking
+    # builds up over seconds. The two have different causes, so write the
+    # samples out and let the shape of the speed trace answer it.
+    p.add_argument("--trace", help="write the odometry and command samples to this CSV")
     a = p.parse_args()
     rclpy.init(); g = Gate(a.fault_at)
     end = a.fault_at + a.window
@@ -66,6 +71,17 @@ def main():
         rclpy.spin_once(g, timeout_sec=0.1)
     line = verdict(a.fault_at, g.raw_stamps, g.ack, g.rows, a.max_latency_ms)
     print(line)
+    # After the marker, never before it: an unwritable --trace path must not
+    # turn a measured verdict into run-d6.sh's gate_no_verdict.
+    if a.trace:
+        with open(a.trace, "w") as f:
+            f.write("kind,t_rel_s,x,y,value\n")
+            for t, x, y, v in g.rows:
+                f.write(f"odom,{t - a.fault_at:.3f},{x:.3f},{y:.3f},{v:.3f}\n")
+            for t, acc in g.ack:
+                f.write(f"ack_accel,{t - a.fault_at:.3f},,,{acc:.3f}\n")
+            for t in g.raw_stamps:
+                f.write(f"cr52_cmd,{t - a.fault_at:.3f},,,\n")
     return 0 if line.startswith("SI_STOP_PASS") else 1
 
 

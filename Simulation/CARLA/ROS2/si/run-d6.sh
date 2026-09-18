@@ -82,7 +82,8 @@ fi
 # fires. Do not add a bare `sleep "$DRIVE_S"` here: the driving time and the
 # gate's warm-up are meant to overlap, not happen back to back.
 FAULT_AT=$(awk -v n="$(date +%s.%N)" -v d="$DRIVE_S" 'BEGIN { printf "%.3f", n + d }')
-$DOCKER --name d6-gate visionpilot:si "source /ws/install/setup.bash && python3 /ws/si/si_stop_gate.py --fault-at $FAULT_AT --window 30 --max-latency-ms $BUDGET" > /dev/null || fail gate
+# --trace goes into /snaps because that is the run's only writable host mount.
+$DOCKER --name d6-gate visionpilot:si "source /ws/install/setup.bash && python3 /ws/si/si_stop_gate.py --fault-at $FAULT_AT --window 30 --max-latency-ms $BUDGET --trace /snaps/trace.csv" > /dev/null || fail gate
 $DOCKER --name d6-snap visionpilot:si "source /ws/install/setup.bash && python3 /ws/si/snap.py /snaps --seconds $((DRIVE_S + 40))" > /dev/null || fail snap
 case "$MODE" in
   standin)
