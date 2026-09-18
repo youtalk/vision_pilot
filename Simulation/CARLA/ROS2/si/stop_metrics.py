@@ -51,9 +51,15 @@ def verdict(fault_at, raw_stamps, ack, rows, max_latency_ms,
     # A car that never moved satisfies "stopped" at sample zero, so without
     # this it passes the gate with stop_distance_m=0.00, which a person reads
     # as "the Safety Island stopped the car in 8 ms".
+    # Having no pre-fault odometry at all is a plumbing failure, not a parked
+    # car, and the two used to share one reason slug. Keep them apart, and
+    # carry the speed never_moving was judged on so the number is arguable.
     pre = [r for r in rows if r[0] < fault_at]
-    if not pre or max(r[3] for r in pre) < min_pre_fault_speed:
-        return "SI_STOP_FAIL reason=never_moving"
+    if not pre:
+        return "SI_STOP_FAIL reason=no_pre_fault_odom"
+    max_pre = max(r[3] for r in pre)
+    if max_pre < min_pre_fault_speed:
+        return f"SI_STOP_FAIL reason=never_moving max_pre_speed_mps={max_pre:.2f}"
     # Commands already flowing before the fault mean first_cr52_cmd_ms measures
     # the next periodic sample, not a reaction to anything.
     if any(t < fault_at for t in raw_stamps):
@@ -72,6 +78,13 @@ def verdict(fault_at, raw_stamps, ack, rows, max_latency_ms,
     if d is None:
         return f"SI_STOP_FAIL reason=no_stop first_cr52_cmd_ms={latency_ms:.0f}"
     if d > max_stop_m:
-        return f"SI_STOP_FAIL reason=stop_too_far stop_distance_m={d:.2f}"
+        # Every sibling FAIL line carries the latency, and the PASS line
+        # carries stop_s. Without them this line cannot distinguish a slow
+        # reaction from weak braking, which is the first question a reader
+        # asks. Board 2's standin rehearsal on 2026-09-18 failed here at
+        # 67.14 m and the answer was not in the record.
+        return (f"SI_STOP_FAIL reason=stop_too_far stop_distance_m={d:.2f} "
+                f"first_cr52_cmd_ms={latency_ms:.0f} first_si_ack_ms={ack_ms:.0f} "
+                f"stop_s={t_stop - fault_at:.2f}")
     return (f"SI_STOP_PASS first_cr52_cmd_ms={latency_ms:.0f} first_si_ack_ms={ack_ms:.0f} "
             f"stop_distance_m={d:.2f} stop_s={t_stop - fault_at:.2f}")
