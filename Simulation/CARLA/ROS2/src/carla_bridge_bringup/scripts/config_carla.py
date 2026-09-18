@@ -84,7 +84,48 @@ def _setup_vehicle(world, config):
     )
     spawn_pt = spawn_points[idx]
 
-    return world.spawn_actor(bp, spawn_pt, attach_to=None)
+    vehicle = world.spawn_actor(bp, spawn_pt, attach_to=None)
+    _tune_ackermann_controller(vehicle)
+    return vehicle
+
+
+# CARLA's ackermann controller tracks SPEED. The acceleration field of
+# AckermannDrive is only a clip on the speed PID's output, never a command
+# (AckermannController.cpp, RunControlSpeed). Its two loops then decide how
+# fast the vehicle can reach that clip, and the defaults cannot:
+#
+#   outer  the speed PID's derivative acts on the measurement, so sustaining
+#          a needs a speed error of (Kd / Kp) * a. At 0.25 / 0.15 that is
+#          5 m/s of error to hold 3 m/s2, which a velocity ramp never supplies,
+#          and near zero speed it leaves an exponential crawl.
+#   inner  the pedal is an integrator advanced by accel_kp * error PER TICK.
+#          This bench runs synchronous at 0.1 s, so at the default 0.01 the
+#          brake needs about six seconds to reach its working point.
+#
+# Measured on rog-amd 2026-09-18 against the gate D6 stop profile: the ego
+# needed 67.71 m to stop from 11.94 m/s while the Safety Island commanded
+# 3.00 m/s2 the whole way, and the achieved rate peaked at 2.51 m/s2. The
+# vehicle itself stops in 10.50 m under a direct full brake, so none of that
+# was the plant. These gains come from sweeping both loops on the bench: they
+# stop in 1.08x the theoretical v^2 / 2a distance at a peak of exactly
+# 3.00 m/s2. The peak is the point. The demo claims a controlled 3 m/s2 stop,
+# so gains that merely stop sooner by slamming the brake are the wrong fix.
+ACKERMANN_GAINS = dict(
+    speed_kp=0.50, speed_ki=0.0, speed_kd=0.05,
+    accel_kp=0.05, accel_ki=0.0, accel_kd=0.03,
+)
+
+
+def _tune_ackermann_controller(vehicle):
+    try:
+        vehicle.apply_ackermann_controller_settings(
+            carla.AckermannControllerSettings(**ACKERMANN_GAINS)
+        )
+        logging.info("ackermann controller gains %s", ACKERMANN_GAINS)
+    except (AttributeError, RuntimeError) as exc:
+        # A server without the settings RPC must not stop the bridge from
+        # coming up. It only means the stop profile is tracked poorly.
+        logging.warning("could not set ackermann controller gains: %s", exc)
 
 
 def _setup_sensors(world, vehicle, sensors_config):
