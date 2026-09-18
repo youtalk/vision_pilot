@@ -76,7 +76,12 @@ def main():
             if lap.update(tf.location.x, tf.location.y):
                 mean = speed_sum / n
                 if mean < MIN_MEAN_SPEED:
-                    print(f"D4_LAP_FAIL reason=too_slow mean_speed_mps={mean:.2f} lap_m={lap.travelled_m:.1f}"); return 1
+                    # max_cte_m and samples too: every sibling FAIL line
+                    # carries the cross-track error, and too_slow is the one
+                    # D4 failure where the lap actually closed, so the
+                    # lane-keeping evidence exists and is worth keeping.
+                    print(f"D4_LAP_FAIL reason=too_slow mean_speed_mps={mean:.2f} lap_m={lap.travelled_m:.1f}"
+                          f" max_cte_m={max_cte:.2f} samples={n}"); return 1
                 print(f"D4_LAP_PASS lap_m={lap.travelled_m:.1f} max_cte_m={max_cte:.2f} samples={n} mean_speed_mps={mean:.2f}"); return 0
             # One sample per simulation step, which is the 10 Hz the docstring
             # promises at fixed_delta_seconds 0.1. time.sleep() would resample the
