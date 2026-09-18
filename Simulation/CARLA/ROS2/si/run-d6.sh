@@ -108,16 +108,20 @@ case "$MODE" in
       "source /ws/install/setup.bash && timeout 10 ros2 topic echo --once /localization/kinematic_state --field twist.twist.linear.x" | tr -d '\r' | awk '/^-?[0-9]/ { v = $0 } END { print v }')
     [ -n "$v0" ] || fail no_v0
     awk -v v="$v0" 'BEGIN { exit !(v ~ /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$/) }' || fail bad_v0
+    # Start the stand-in BEFORE the fault and let it wait for FAULT_AT itself.
+    # Cold-starting it after the fault put a container start and DDS discovery,
+    # about 750 ms, in front of the ramp, and at 12 m/s that is 9 m charged to
+    # the stop distance. si_fault.sh has always worked this way.
+    docker run --rm --name d6-standin --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
+      "source /ws/install/setup.bash && python3 /ws/si/si_standin.py --v0 $v0 --start-at $FAULT_AT" > "$LOG/standin.log" 2>&1 &
+    sipid=$!
     # Wait for FAULT_AT itself (si_fault.sh's own idiom) before "failing"
     # VisionPilot, so the fault instant means the same thing in every mode.
     sleep "$(awk -v a="$FAULT_AT" -v n="$(date +%s.%N)" 'BEGIN { d = a - n; print (d > 0) ? d : 0 }')"
     docker rm -f d6-vp > /dev/null 2>&1      # VisionPilot "fails"
     # t= is the instant the gate measures from (--fault-at) in every mode;
     # fired= is when the fault actually landed. si_fault.sh prints the same pair.
-    echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT fired=$(date +%s.%N) v0=$v0"
-    docker run --rm --name d6-standin --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
-      "source /ws/install/setup.bash && python3 /ws/si/si_standin.py --v0 $v0" > "$LOG/standin.log" 2>&1 &
-    sipid=$! ;;
+    echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT fired=$(date +%s.%N) v0=$v0" ;;
   kill|channel)
     bash "$here/si_fault.sh" "$MODE" "$FAULT_AT" | tee "$LOG/fault.txt"
     rc=${PIPESTATUS[0]}
