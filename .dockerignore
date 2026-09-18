@@ -4,6 +4,21 @@
 !VisionPilot/middleware_recipes
 !VisionPilot/software_defined_vehicle/OpenADKit/Docker
 
+# Dockerfile.si (visionpilot:si) needs the bridge workspace and the staged
+# CARLA wheel. Un-ignoring a leaf needs every parent path component listed
+# too, or docker still prunes the whole subtree at the bare "*" above.
+!Simulation
+!Simulation/CARLA
+!Simulation/CARLA/ROS2
+!Simulation/CARLA/ROS2/src
+!Simulation/CARLA/ROS2/src/**
+!Simulation/CARLA/ROS2/config
+!Simulation/CARLA/ROS2/config/**
+!Simulation/CARLA/ROS2/si
+!Simulation/CARLA/ROS2/si/**
+!Simulation/CARLA/ROS2/.carla_pkg
+!Simulation/CARLA/ROS2/.carla_pkg/*.whl
+
 # Never ship caches, model weights, or media in the build context
 **/__pycache__
 **/.git

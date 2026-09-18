@@ -1,0 +1,31 @@
+# rog-amd side of the CES 2027 demo: VisionPilot (CUDA, ROS 2 input) plus the
+# CARLA bridge workspace in one image, so every ROS 2 process on the host runs
+# under the same Jazzy + rmw_cyclonedds runtime.
+#   docker build -f Simulation/CARLA/ROS2/Dockerfile.si -t visionpilot:si \
+#     --build-arg CARLA_WHEEL=<path relative to the repo root> .
+FROM visionpilot:gpu-ros2
+ARG CARLA_WHEEL
+# autoware_msgs 1.13.0. Pinned so a rebuild reproduces the same message
+# definitions. Bump this on purpose, with a new commit, not as a side
+# effect of a routine rebuild.
+ARG AUTOWARE_MSGS_REF=bb8e7bf5d97168663e0e7b357929e4fcdbd3a967
+SHELL ["/bin/bash", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-jazzy-ackermann-msgs ros-jazzy-rmw-cyclonedds-cpp python3-colcon-common-extensions git \
+      python3-pip build-essential \
+    && rm -rf /var/lib/apt/lists/*
+COPY ${CARLA_WHEEL} /tmp/
+RUN pip3 install --break-system-packages /tmp/*.whl numpy && rm /tmp/*.whl
+WORKDIR /ws
+RUN git init src/autoware_msgs \
+    && git -C src/autoware_msgs remote add origin https://github.com/autowarefoundation/autoware_msgs.git \
+    && git -C src/autoware_msgs fetch --depth 1 origin ${AUTOWARE_MSGS_REF} \
+    && git -C src/autoware_msgs checkout FETCH_HEAD
+COPY Simulation/CARLA/ROS2/src /ws/src/carla_bridge
+COPY Simulation/CARLA/ROS2/config /ws/config
+RUN source /opt/ros/jazzy/setup.bash \
+    && colcon build --packages-up-to carla_bridge_bringup carla_control_publisher carla_vehicle_speed_publisher carla_msgs autoware_control_msgs autoware_vehicle_msgs
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=1
+COPY Simulation/CARLA/ROS2/si /ws/si
+ENTRYPOINT ["/bin/bash", "-lc"]
+CMD ["source /ws/install/setup.bash && exec bash"]
