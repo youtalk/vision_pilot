@@ -31,6 +31,7 @@ add_library(visualization
         src/visual_interface.cpp
         src/visualization.cpp
         src/local_display.cpp
+        src/frame_recorder.cpp
         ${VIS_SOURCES}
 )
 
