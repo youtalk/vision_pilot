@@ -60,18 +60,22 @@ def test_verdict_fails_a_car_that_never_moved():
     # called this SI_STOP_PASS ... stop_distance_m=0.00 stop_s=0.00.
     parked = [(FAULT - 20 + 0.05 * i, 0.0, 0.0, 0.0) for i in range(600)]
     assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), parked, 200.0) \
-        == "SI_STOP_FAIL reason=never_moving"
+        == "SI_STOP_FAIL reason=never_moving max_pre_speed_mps=0.00"
 
 
 def test_verdict_fails_a_crawl_before_the_fault():
+    # The speed it was judged on rides along, so a reader can argue with it
+    # instead of taking "never_moving" on trust.
     assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), _rows(v0=2.0), 200.0) \
-        == "SI_STOP_FAIL reason=never_moving"
+        == "SI_STOP_FAIL reason=never_moving max_pre_speed_mps=2.00"
 
 
 def test_verdict_fails_when_there_are_no_pre_fault_samples():
+    # A distinct slug from never_moving: no odometry at all is a plumbing
+    # failure, and blaming the vehicle for it sends the reader the wrong way.
     late = [r for r in _rows() if r[0] >= FAULT]
     assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), late, 200.0) \
-        == "SI_STOP_FAIL reason=never_moving"
+        == "SI_STOP_FAIL reason=no_pre_fault_odom"
 
 
 def test_verdict_fails_when_commands_were_already_flowing():
@@ -84,6 +88,8 @@ def test_verdict_fails_a_coast_down_that_stops_too_far_away():
     v = s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05),
                   _rows(decel=1.0, post_s=20.0), 200.0)
     assert v.startswith("SI_STOP_FAIL reason=stop_too_far stop_distance_m=7")
+    # The fields that tell a slow reaction apart from weak braking.
+    assert "first_cr52_cmd_ms=" in v and "first_si_ack_ms=" in v and "stop_s=" in v
 
 
 def test_verdict_names_the_remaining_rungs():
