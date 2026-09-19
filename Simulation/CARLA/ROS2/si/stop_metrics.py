@@ -33,11 +33,38 @@ def first_ramp_after(t0, rows, decel):
 # Gate D6's decision ladder, kept here so every branch is testable: si_stop_gate
 # imports rclpy at module level and nothing in it could be exercised on a bench PC.
 MIN_PRE_FAULT_SPEED = 5.0   # m/s
-# A stop from the gate D4 cruise speed of 12 m/s at the firmware's 3 m/s^2 ramp
-# covers v^2 / 2a = 24 m. 40 m leaves headroom for the reaction time and a
-# softer real ramp while still rejecting a coast-down that happens to reach
-# zero inside the 30 s window.
-MAX_STOP_M = 40.0
+# The stop-distance budget, derived rather than chosen. 40 m used to sit here
+# as "24 m of braking plus headroom", and board 2 measured 39.62, 41.58 and
+# 42.02 m on three consecutive kill runs: the threshold sat inside the spread,
+# so the gate passed or failed on the phase of a 1 Hz heartbeat.
+#
+# What the stop actually costs, measured on board 2 on 2026-09-18 across three
+# runs whose commanded acceleration was -3.00 m/s^2 in all 197 samples:
+#
+#   CRUISE_MPS * MAX_LATENCY_S   the latency this gate already budgets. The
+#                                car runs on unbraked for all of it.
+#   CRUISE_MPS * RAMP_S          CARLA's pedal is an integrator, so the brake
+#                                needs about half a second to reach its working
+#                                point after the command arrives. Measured 0.45
+#                                to 0.55 s in all three runs.
+#   BRAKE_K * v^2 / 2a           the braking itself. The tuned ackermann gains
+#                                peak at exactly the commanded 3.00 m/s^2 and
+#                                achieved 2.82 to 2.83 m/s^2 average, which is
+#                                1.2 times the theoretical distance.
+#
+# That is 14.4 + 28.8 = 43.2 m, rounded up to the next metre. The gate is not
+# weakened by it: a lost command, a late one, an arbiter that never switched,
+# or braking that degrades by more than about a fifth all still fail it, and 44
+# still rejects a coast-down that happens to reach zero inside the 30 s window.
+CRUISE_MPS = 12.0
+MAX_LATENCY_S = 0.7
+RAMP_S = 0.5
+BRAKE_A = 3.0
+BRAKE_K = 1.2
+MAX_STOP_M = float(math.ceil(
+    CRUISE_MPS * (MAX_LATENCY_S + RAMP_S)
+    + BRAKE_K * CRUISE_MPS ** 2 / (2 * BRAKE_A)
+))
 
 
 def verdict(fault_at, raw_stamps, ack, rows, max_latency_ms,
