@@ -30,6 +30,7 @@
     "libopencv",
     "libyaml",
     "luma",
+    "nanosec",
     "newkey",
     "nosound",
     "nosun",
