@@ -85,6 +85,24 @@ sleep "$GROW_S"
 after=$(wc -c < "$CAPTURE")
 [ "$after" -gt "$before" ] || fail console_not_growing
 
+# VisionPilot has to be running, and its HUD directory empty, BEFORE the run.
+# The kill route stops the unit and nothing restarts it, so the recording after
+# a recording starts with no VisionPilot at all and captures a car that never
+# moves, with a HUD directory still full of the previous run's frames. Both were
+# measured on the bench 2026-09-18 and cost a run. Waiting for a Latency line
+# rather than for is-active is deliberate: the unit is active while the NPU
+# model is still loading, which takes about twenty seconds.
+if [ -n "${X5H_BOARD:-}" ]; then
+  ssh "$X5H_BOARD" "rm -f /opt/npu/video/hud/frame_*.png; systemctl start x5h-vp.service" || fail board_prep
+  vp_ready=0
+  for _ in $(seq 1 60); do
+    vp_ready=$(ssh "$X5H_BOARD" "journalctl -u x5h-vp -n 40 --no-pager -o cat | grep -c 'Latency.*wall='" 2>/dev/null || echo 0)
+    [ "${vp_ready:-0}" -gt 0 ] && break
+    sleep 2
+  done
+  [ "${vp_ready:-0}" -gt 0 ] || fail vp_not_inferring
+fi
+
 python3 "$here/stamp_console.py" "$CAPTURE" > "$RUN/cr52-console.txt" 2> "$RUN/stamp.log" &
 stamp_pid=$!
 # grep -c on a file, never a pipe into grep -q: grep -q exits at the first match
