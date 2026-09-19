@@ -129,9 +129,13 @@ def main():
         # CARLA delivers on one sensor thread, so n needs no lock.
         nonlocal n
         now = time.time()
-        name = f"{n:06d}.jpg"
-        # save_to_disk picks its codec from the extension, so .jpg is what makes
-        # this a JPEG rather than the PNG the CARLA examples write.
+        # Bench-measured 2026-09-18: this build's save_to_disk writes PNG
+        # whatever extension it is given. Asking for .jpg produced a directory
+        # of .png files indexed as .jpg, and the composer found none of them.
+        # PNG costs about 1.6 MB a frame here, so a 70 s run is roughly 1 GB in
+        # /tmp. Encoding JPEG in this callback instead would put the encode on
+        # CARLA's own sensor thread.
+        name = f"{n:06d}.png"
         img.save_to_disk(os.path.join(a.out, name))
         write_row(index, name, now)
         n += 1
