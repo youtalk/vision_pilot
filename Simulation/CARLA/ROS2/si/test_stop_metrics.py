@@ -103,3 +103,16 @@ def test_verdict_names_the_remaining_rungs():
     never = [r for r in rows if r[0] < FAULT + 1.0]   # window ends while still rolling
     assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), never, 200.0) \
         == "SI_STOP_FAIL reason=no_stop first_cr52_cmd_ms=50"
+
+
+def test_the_stop_budget_clears_the_board_runs_it_was_derived_from():
+    """Board 2, 2026-09-18, three consecutive kill runs: 39.62, 41.58, 42.02 m.
+
+    The old fixed 40 m sat inside that spread, so the gate's verdict turned on
+    the phase of a 1 Hz heartbeat. A budget that does not clear the runs it was
+    derived from is not a budget.
+    """
+    assert s.MAX_STOP_M > 42.02
+    # And it is still a gate: the same stop with the latency budget blown would
+    # be well past it.
+    assert s.MAX_STOP_M < 42.02 + s.CRUISE_MPS * 0.5
