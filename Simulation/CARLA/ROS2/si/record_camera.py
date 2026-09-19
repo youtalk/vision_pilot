@@ -15,10 +15,10 @@ jpeg_bridge.py must already be running on this host. Nothing here starts it,
 and nothing here can tell "the bridge is not running" apart from "the camera is
 not publishing", so record-demo.sh checks the frame count instead.
 
-bench_time in index.csv is the SAMPLE HEADER stamp, not the arrival time here.
-The board and this host receive the same sample over the same LAN, so the header
-is the only time the two panes have in common; an arrival time recorded here
-would slide the pane by however long this host's own DDS path took.
+bench_time in index.csv is the sample's header stamp when that stamp is a wall
+clock, and the arrival time on this host otherwise. This bench runs the CARLA
+bridge under use_sim_time, so in practice it is the arrival time, and the run
+says so with a REC_CAM clock=arrival line.
 
 Prints REC_CAM ready, then REC_CAM n=<frames> dir=<dir>, or
 REC_CAM_FAIL reason=<slug>.
@@ -49,7 +49,7 @@ class RecordCamera(Node):
         super().__init__("record_camera")
         self.out = out
         self.n = 0
-        self.bad = None
+        self.sim_time = False
         self.index = open_index(os.path.join(out, "index.csv"))
         # Reliability must match jpeg_bridge.py's publisher, which is RELIABLE
         # with KEEP_LAST(1). This is the one QoS field that silently costs the
@@ -63,14 +63,19 @@ class RecordCamera(Node):
         self.create_subscription(CompressedImage, topic, self.on_image, qos)
 
     def on_image(self, m):
+        # Bench-measured 2026-09-18: this bench runs the CARLA bridge under
+        # use_sim_time, so the header stamp is simulation time, a few thousand
+        # seconds from zero, and not a clock any other stream shares. Refusing
+        # it recorded n=0 and cost a recording run. The arrival time on this
+        # host is the bench clock the reel aligns on. It differs from the
+        # board's own receive time by one LAN hop, which is far inside the one
+        # rendered frame the reel claims. The header still wins when it IS an
+        # epoch, because then it is the better of the two.
         try:
             t = stamp_seconds(m.header.stamp.sec, m.header.stamp.nanosec)
-        except ValueError as exc:
-            # Stop rather than keep recording: every frame from here on would
-            # carry the same unusable time, and a full directory whose index
-            # cannot be aligned is a worse thing to find than a short one.
-            self.bad = str(exc)
-            return
+        except ValueError:
+            t = time.time()
+            self.sim_time = True
         name = f"{self.n:06d}.jpg"
         with open(os.path.join(self.out, name), "wb") as f:
             f.write(bytes(m.data))       # unchanged: the JPEG the board received
@@ -100,15 +105,16 @@ def main():
     print("REC_CAM ready", flush=True)
     end = time.time() + a.seconds
     try:
-        while time.time() < end and node.bad is None:
+        while time.time() < end:
             rclpy.spin_once(node, timeout_sec=0.1)
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         node.index.close()
-    if node.bad:
-        print(f"REC_CAM_FAIL reason={node.bad} n={node.n}", flush=True)
-        return 1
+    if node.sim_time:
+        # Not a failure, but the reader of this run deserves to know which
+        # clock the index carries.
+        print("REC_CAM clock=arrival reason=sim_time_header", flush=True)
     print(f"REC_CAM n={node.n} dir={a.out}", flush=True)
     return 0
 
