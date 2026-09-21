@@ -1,17 +1,11 @@
 import rclpy
 from rclpy.node import Node
 
-import numpy as np
-import math
-import carla
 from ackermann_msgs.msg import AckermannDriveStamped
-from carla_msgs.msg import CarlaEgoVehicleControl
+from autoware_control_msgs.msg import Control
 from std_msgs.msg import Float64
 
-MAX_ACCELERATION = 1.5   # m/s²
-MAX_DECELERATION = 3.0   # m/s²
-A_DES_MIN = -8.0         # reject planner spikes below this (phantom CIPO gave -50)
-A_DES_MAX = MAX_ACCELERATION
+from .arbiter import clamp_accel, choose_source
 
 
 class CarlaControlPublisher(Node):
@@ -33,12 +27,14 @@ class CarlaControlPublisher(Node):
         self.steering_sub_ = self.create_subscription(Float64, '/vehicle/steering_cmd', self.steering_callback, 1)
         self.throttle_sub_ = self.create_subscription(Float64, '/vehicle/throttle_cmd', self.throttle_callback, 1)
         self.speed_sub_ = self.create_subscription(Float64, '/vehicle/speed', self.speed_callback, 1)
+        self.si_sub_ = self.create_subscription(Control, '/control/trajectory_follower/control_cmd', self.si_callback, 1)
         self.ackerman_control_pub_ = self.create_publisher(AckermannDriveStamped, "/carla/hero/ackermann_control_cmd", 1)
 
         self.speed = 0.0
         self.v_ref = 30.0
         self.steering_angle_cmd = 0.0
         self.acceleration = 0.0
+        self.si_rx_time = None
 
         # Publish only once BOTH a fresh steering and a fresh throttle have
         # arrived. Each planning cycle in VisionPilot emits one steering + one
@@ -47,30 +43,27 @@ class CarlaControlPublisher(Node):
         self.have_steering = False
         self.have_throttle = False
 
-        # Failsafe watchdog: if upstream stalls, don't keep applying the last
-        # (possibly full-lock) command forever. See note below.
-        self.last_cmd_time = self.get_clock().now()
-        # self.watchdog = self.create_timer(0.2, self.watchdog_callback)
-
-
-    def publish_control(self):
-        v = max(0.0, self.speed + self.acceleration * 2.0)
-
+    def publish_ackermann(self, steering_angle, speed, acceleration):
         cmd = AckermannDriveStamped()
         cmd.header.stamp = self.get_clock().now().to_msg()
         cmd.header.frame_id = 'hero'
-        cmd.drive.steering_angle = float(self.steering_angle_cmd)  # radians
+        cmd.drive.steering_angle = steering_angle  # radians
         cmd.drive.steering_angle_velocity = 0.0
-        cmd.drive.speed = v
-        cmd.drive.acceleration = self.acceleration
+        cmd.drive.speed = speed
+        cmd.drive.acceleration = acceleration
         cmd.drive.jerk = 10.0
         self.ackerman_control_pub_.publish(cmd)
 
-        # self.last_cmd_time = now
+    def publish_control(self):
+        self.publish_ackermann(float(self.steering_angle_cmd),
+                               max(0.0, self.speed + self.acceleration * 2.0),
+                               self.acceleration)
 
     def try_publish(self):
         if self.have_steering and self.have_throttle:
-            self.publish_control()
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if choose_source(now, self.si_rx_time) == "vp":
+                self.publish_control()
             self.have_steering = False
             self.have_throttle = False
 
@@ -82,25 +75,18 @@ class CarlaControlPublisher(Node):
 
     def throttle_callback(self, msg):
         # self.get_logger().info(f'Throttle command received: {msg.data}')
-        self.acceleration = msg.data
+        self.acceleration = clamp_accel(msg.data)
         self.have_throttle = True
         self.try_publish()
 
     def speed_callback(self, msg):
         self.speed = msg.data
 
-    def watchdog_callback(self):
-        # If no fresh pair has been published recently, command a safe stop
-        # (zero throttle, no brake) rather than latching the last steering.
-        dt = (self.get_clock().now() - self.last_cmd_time).nanoseconds * 1e-9
-        if dt > 0.2:
-            msg = CarlaEgoVehicleControl()
-            msg.throttle = 0.0
-            msg.steer = 0.0
-            msg.brake = 0.0
-            msg.gear = 1
-            self.control_pub_.publish(msg)
-            self.get_logger().warn(f'Watchdog: no fresh command for {dt:.2f}s — safing')
+    def si_callback(self, msg):
+        self.si_rx_time = self.get_clock().now().nanoseconds * 1e-9
+        self.publish_ackermann(self.steering_sign * float(msg.lateral.steering_tire_angle),
+                               max(0.0, float(msg.longitudinal.velocity)),
+                               float(msg.longitudinal.acceleration))
 
 
 def main(args=None):
