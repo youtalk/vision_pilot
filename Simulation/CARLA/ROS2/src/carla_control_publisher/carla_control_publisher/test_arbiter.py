@@ -1,5 +1,5 @@
 """Pure decision logic of carla_control_publisher. Run: python3 -m pytest test_arbiter.py"""
-import arbiter as a
+from . import arbiter as a
 
 
 def test_clamp_rejects_phantom_cipo_spike():
