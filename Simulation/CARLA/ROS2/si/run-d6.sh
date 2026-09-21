@@ -6,12 +6,6 @@
 #   channel  full stack: si_fault.sh channel, fault=1 on rpmsg-si (200 ms budget)
 #   run-d6.sh <package-dir> <standin|kill|channel>
 # Markers: SI_FAULT_INJECTED ... then SI_STOP_PASS ... | SI_STOP_FAIL reason=<slug>
-#
-# Timing: FAULT_AT is fixed to "now + DRIVE_S" BEFORE d6-gate starts, and
-# passed to it as --fault-at. That is not cosmetic: si_fault.sh sleeps until
-# a FUTURE instant, so a FAULT_AT set to "now" fires the fault before d6-gate
-# has even subscribed, and the gate misses the samples it exists to measure.
-# Driving time and the gate's subscription warm-up now overlap on purpose.
 set -uo pipefail
 PKG="${1:?package dir}"; MODE="${2:?standin|kill|channel}"; here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
@@ -79,8 +73,10 @@ fi
 
 # FAULT_AT is fixed NOW, before d6-gate starts, and handed to it as
 # --fault-at so the gate can warm up its subscriptions before the fault
-# fires. Do not add a bare `sleep "$DRIVE_S"` here: the driving time and the
-# gate's warm-up are meant to overlap, not happen back to back.
+# fires. A FAULT_AT of "now" would fire the fault before the gate had even
+# subscribed, and the gate would miss the samples it exists to measure. Do
+# not add a bare `sleep "$DRIVE_S"` here: the driving time and the gate's
+# warm-up are meant to overlap, not happen back to back.
 FAULT_AT=$(awk -v n="$(date +%s.%N)" -v d="$DRIVE_S" 'BEGIN { printf "%.3f", n + d }')
 # --trace goes into /snaps because that is the run's only writable host mount.
 $DOCKER --name d6-gate visionpilot:si "source /ws/install/setup.bash && python3 /ws/si/si_stop_gate.py --fault-at $FAULT_AT --window 30 --max-latency-ms $BUDGET --trace /snaps/trace.csv" > /dev/null || fail gate
@@ -108,10 +104,9 @@ case "$MODE" in
       "source /ws/install/setup.bash && timeout 10 ros2 topic echo --once /localization/kinematic_state --field twist.twist.linear.x" | tr -d '\r' | awk '/^-?[0-9]/ { v = $0 } END { print v }')
     [ -n "$v0" ] || fail no_v0
     awk -v v="$v0" 'BEGIN { exit !(v ~ /^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$/) }' || fail bad_v0
-    # Start the stand-in BEFORE the fault and let it wait for FAULT_AT itself.
-    # Cold-starting it after the fault put a container start and DDS discovery,
-    # about 750 ms, in front of the ramp, and at 12 m/s that is 9 m charged to
-    # the stop distance. si_fault.sh has always worked this way.
+    # Start the stand-in BEFORE the fault and let it wait for FAULT_AT itself,
+    # the way si_fault.sh has always worked. si_standin.py's docstring records
+    # what a cold start after the fault costs the stop distance.
     docker run --rm --name d6-standin --net=host --ipc=host -e ROS_DOMAIN_ID=1 -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e CYCLONEDDS_URI=file:///ws/si/cyclonedds-bench.xml -e CARLA_BENCH_IF="${CARLA_BENCH_IF:-enx00e04c680c75}" -v "$here:/ws/si:ro" visionpilot:si \
       "source /ws/install/setup.bash && python3 /ws/si/si_standin.py --v0 $v0 --start-at $FAULT_AT" > "$LOG/standin.log" 2>&1 &
     sipid=$!

@@ -39,9 +39,9 @@ from stop_metrics import verdict
 
 
 class Gate(Node):
-    def __init__(self, t_fault):
+    def __init__(self):
         super().__init__("si_stop_gate")
-        self.t_fault = t_fault; self.raw_stamps = []; self.rows = []; self.ack = []
+        self.raw_stamps = []; self.rows = []; self.ack = []
         self.create_subscription(Control, "/control/trajectory_follower/control_cmd_raw", self.on_raw, 10)
         self.create_subscription(Odometry, "/localization/kinematic_state", self.on_odom, 10)
         self.create_subscription(AckermannDriveStamped, "/carla/hero/ackermann_control_cmd", self.on_ack, 10)
@@ -65,7 +65,7 @@ def main():
     # samples out and let the shape of the speed trace answer it.
     p.add_argument("--trace", help="write the odometry and command samples to this CSV")
     a = p.parse_args()
-    rclpy.init(); g = Gate(a.fault_at)
+    rclpy.init(); g = Gate()
     end = a.fault_at + a.window
     while time.time() < end:
         rclpy.spin_once(g, timeout_sec=0.1)

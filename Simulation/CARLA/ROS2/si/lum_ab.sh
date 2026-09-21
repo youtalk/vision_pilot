@@ -67,10 +67,8 @@ if [ "$server_a_up" -eq 0 ]; then
   walk 70 low-sun70-ae0 && probe low-sun70-ae0
 fi
 stop_all
-# Server B: Low, auto exposure on, no sun.
 server Low 1 low-nosun-ae1 && walk "" low-nosun-ae1 && probe low-nosun-ae1
 stop_all
-# Server C: Medium, auto exposure off, no sun.
 server Medium 0 medium-nosun-ae0 && walk "" medium-nosun-ae0 && probe medium-nosun-ae0
 stop_all
 cat "$OUT/results.txt"

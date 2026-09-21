@@ -35,7 +35,6 @@ class CarlaControlPublisher(Node):
         self.steering_angle_cmd = 0.0
         self.acceleration = 0.0
         self.si_rx_time = None
-        self.si_cmd = None
 
         # Publish only once BOTH a fresh steering and a fresh throttle have
         # arrived. Each planning cycle in VisionPilot emits one steering + one
@@ -44,24 +43,21 @@ class CarlaControlPublisher(Node):
         self.have_steering = False
         self.have_throttle = False
 
-        # Failsafe watchdog: if upstream stalls, don't keep applying the last
-        # (possibly full-lock) command forever. See note below.
-        self.last_cmd_time = self.get_clock().now()
-
-    def publish_control(self):
-        v = max(0.0, self.speed + self.acceleration * 2.0)
-
+    def publish_ackermann(self, steering_angle, speed, acceleration):
         cmd = AckermannDriveStamped()
         cmd.header.stamp = self.get_clock().now().to_msg()
         cmd.header.frame_id = 'hero'
-        cmd.drive.steering_angle = float(self.steering_angle_cmd)  # radians
+        cmd.drive.steering_angle = steering_angle  # radians
         cmd.drive.steering_angle_velocity = 0.0
-        cmd.drive.speed = v
-        cmd.drive.acceleration = self.acceleration
+        cmd.drive.speed = speed
+        cmd.drive.acceleration = acceleration
         cmd.drive.jerk = 10.0
         self.ackerman_control_pub_.publish(cmd)
 
-        # self.last_cmd_time = now
+    def publish_control(self):
+        self.publish_ackermann(float(self.steering_angle_cmd),
+                               max(0.0, self.speed + self.acceleration * 2.0),
+                               self.acceleration)
 
     def try_publish(self):
         if self.have_steering and self.have_throttle:
@@ -87,19 +83,10 @@ class CarlaControlPublisher(Node):
         self.speed = msg.data
 
     def si_callback(self, msg):
-        self.si_cmd = msg
         self.si_rx_time = self.get_clock().now().nanoseconds * 1e-9
-        self.publish_si()
-
-    def publish_si(self):
-        cmd = AckermannDriveStamped()
-        cmd.header.stamp = self.get_clock().now().to_msg()
-        cmd.header.frame_id = 'hero'
-        cmd.drive.steering_angle = self.steering_sign * float(self.si_cmd.lateral.steering_tire_angle)
-        cmd.drive.speed = max(0.0, float(self.si_cmd.longitudinal.velocity))
-        cmd.drive.acceleration = float(self.si_cmd.longitudinal.acceleration)
-        cmd.drive.jerk = 10.0
-        self.ackerman_control_pub_.publish(cmd)
+        self.publish_ackermann(self.steering_sign * float(msg.lateral.steering_tire_angle),
+                               max(0.0, float(msg.longitudinal.velocity)),
+                               float(msg.longitudinal.acceleration))
 
 
 def main(args=None):

@@ -31,24 +31,18 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
+from lum_stats import from_image
+
 
 def to_bgr(data, height, width, encoding):
     """The encodings CARLA's RGB camera actually emits, as BGR for cv2.
 
-    An unknown encoding raises rather than being reinterpreted: reshaping
-    bgra8 bytes as three channels produces a plausible-looking garbled frame,
-    which is far worse to debug than a refusal.
+    from_image owns the encoding table and raises on an unknown encoding
+    rather than reinterpreting it: reshaping bgra8 bytes as three channels
+    produces a plausible-looking garbled frame, which is far worse to debug
+    than a refusal. cv2 wants contiguous BGR, so copy the reversed view.
     """
-    frame = np.frombuffer(data, dtype=np.uint8)
-    if encoding in ("bgra8", "rgba8"):
-        frame = frame.reshape(height, width, 4)
-        return cv2.cvtColor(
-            frame, cv2.COLOR_BGRA2BGR if encoding == "bgra8" else cv2.COLOR_RGBA2BGR)
-    if encoding == "bgr8":
-        return frame.reshape(height, width, 3)
-    if encoding == "rgb8":
-        return cv2.cvtColor(frame.reshape(height, width, 3), cv2.COLOR_RGB2BGR)
-    raise ValueError(f"unsupported encoding {encoding}")
+    return np.ascontiguousarray(from_image(data, width, height, encoding)[..., ::-1])
 
 
 class JpegBridge(Node):

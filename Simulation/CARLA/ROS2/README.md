@@ -49,8 +49,7 @@ Add this rule to the input chain of `/etc/nftables.conf` on the bench host:
 ```
   # Native ROS 2 / DDS on the bench LAN. CycloneDDS domain 1 uses UDP 7650-7651
   # for multicast discovery and 7660-7679 for the per-participant unicast ports
-  # (MaxAutoParticipantIndex 9). SPDP arrives as fresh multicast, not as
-  # conntrack-established, so the `ct state` rule above never matches it.
+  # (MaxAutoParticipantIndex 9).
   iifname $BIF udp dport 7650-7679 accept
 ```
 
@@ -64,12 +63,9 @@ script instead if the CLI hangs, which it does on this host.
 
 ### GPU memory on the bench host
 
-`rog-amd` has an 8 GB RTX 4070 Laptop GPU. At the default quality, Town04_Opt sits at the edge of that budget and the
-server dies during startup by SIGKILL, with no Vulkan or allocation error in the log. The same command can succeed
-several times and then fail, which makes the fault look like something else.
-
-`run-carla-server.sh` therefore passes `-quality-level=Low`, measured at a peak of about 4.9 GB. Set `CARLA_QUALITY` to
-raise it on a larger GPU.
+`run-carla-server.sh` passes `-quality-level=Low` because the 8 GB bench GPU cannot render Town04_Opt at the default
+quality. Its comment on `CARLA_QUALITY` holds the measured numbers. The failure is intermittent: the same command can
+succeed several times and then fail, which makes the fault look like something else.
 
 Low quality changes what the camera renders, so lane detection was re-baselined against it on 2026-09-16:
 
@@ -81,5 +77,5 @@ Lane detection is unaffected. Every cycle fits a lane path, and the measured cro
 true position to 0.01 m, which also confirms the rig homography. Take the measurement again with
 `lane_baseline.sh <package-dir>` after any change to the camera rig, the map or the quality level.
 
-Measure it with the ego moving. `lane_baseline.sh` walks the ego along the lane centre for that reason. A parked ego at
-spawn index 5 fits a lane path in only 2.4% of cycles, which reads as broken perception and is not.
+Measure it with the ego moving, which is what `lane_baseline.sh` does. A parked ego at spawn index 5 fits a lane path
+in only 2.4% of cycles, which reads as broken perception and is not.
