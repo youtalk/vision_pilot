@@ -28,7 +28,15 @@ if [ -n "$at" ]; then
   now=$(date +%s.%N); sleep "$(awk -v a="$at" -v n="$now" 'BEGIN { d = a - n; print (d > 0) ? d : 0 }')"
 fi
 case "$mode" in
-  kill|freeze) "${SSH[@]}" "$BOARD" 'systemctl stop x5h-vp.service' ;;
+  # Kill first, then stop. Bench-measured on board 2, 2026-09-18: a plain
+  # `systemctl stop` left 10.7 s between the requested instant and the unit
+  # going down, because VisionPilot does not act on SIGTERM and podman waits
+  # out its 10 s stop timeout before SIGKILL. The heartbeat therefore kept
+  # reaching the CR52 for ten seconds after the "fault", so every latency this
+  # route measures would have been ten seconds late. The stop still follows,
+  # because the unit carries Restart=on-failure and a kill on its own brings
+  # VisionPilot back five seconds later.
+  kill|freeze) "${SSH[@]}" "$BOARD" 'systemctl kill -s KILL x5h-vp.service; systemctl stop x5h-vp.service' ;;
   channel)     "${SSH[@]}" "$BOARD" 'systemctl kill -s USR1 x5h-si-link.service' ;;
 esac || { echo "SI_FAULT_FAIL reason=ssh_failed"; exit 1; }
 fired=$(date +%s.%N)
