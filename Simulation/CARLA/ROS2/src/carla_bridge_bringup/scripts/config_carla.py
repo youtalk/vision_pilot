@@ -222,8 +222,16 @@ def main(args):
         settings.fixed_delta_seconds = 0.1  # must match sensor_tick in the sensor JSON
         world.apply_settings(settings)
 
-        traffic_manager = client.get_trafficmanager()
-        traffic_manager.set_synchronous_mode(True)
+        # The Traffic Manager is only needed to drive NPC vehicles or the ego
+        # under autopilot. Creating it always takes port 8000 for this client,
+        # and CARLA then refuses that port to every other client: ScenarioRunner
+        # dies with RuntimeError: std::exception when it asks for its own
+        # Traffic Manager. Create one only when this script actually drives
+        # something.
+        traffic_manager = None
+        if config.get("npc_vehicles") or args.autopilot:
+            traffic_manager = client.get_trafficmanager()
+            traffic_manager.set_synchronous_mode(True)
 
         vehicle = _setup_vehicle(world, config)
         sensors = _setup_sensors(world, vehicle, config.get("sensors", []))
@@ -234,7 +242,7 @@ def main(args):
         world.tick()  # initial tick to settle the world before autopilot/spectator setup
 
         if args.autopilot:
-            vehicle.set_autopilot(True)
+            vehicle.set_autopilot(True, traffic_manager.get_port())
 
         spectator = world.get_spectator()
 
@@ -283,7 +291,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    argparser = argparse.ArgumentParser(description="CARLA ROS2 native")
+    argparser = argparse.ArgumentParser(description="CARLA ROS 2 native")
     argparser.add_argument(
         "--host",
         metavar="H",
