@@ -7,6 +7,7 @@ setup(
     version='1.1.0',
     packages=[package_name],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='Atanasko Boris Mitrev',
     maintainer_email='atanasko.mitrev@autoware.org',
