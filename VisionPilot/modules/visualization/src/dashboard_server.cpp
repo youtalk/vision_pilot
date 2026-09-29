@@ -44,11 +44,7 @@ void serve_client(std::shared_ptr<DashboardState> s, tcp::socket socket)
     ws.accept();
     ws.text(true);
     ws.write(net::buffer(dashboard::hello(now_ms(), s->device)));
-    uint64_t sent = 0;
-    {
-      std::lock_guard<std::mutex> lock(s->mutex);
-      sent = s->seq;
-    }
+    uint64_t sent = 0;  // the current frame, if one exists, goes out right after hello
     while (s->running) {
       std::vector<std::string> frame;
       {
