@@ -83,6 +83,9 @@ struct Config
     bool webrtc_on = false;
     int webrtc_port;
     bool show_window = true;   // false → LocalDisplay runs headless (no window)
+    // Non-empty: DRM driver name; KmsDisplay shows every frame on that
+    // device's connected DisplayPort monitor. Takes precedence over webrtc_on.
+    std::string kms_display;
 };
 
 void init_production_assets(const std::string& icons_dir = "");

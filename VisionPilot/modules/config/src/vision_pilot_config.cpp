@@ -163,6 +163,7 @@ Config load_vision_pilot_config()
     cfg.speed_limit = parse_double(optional(kv, "speed_limit", ""), "speed_limit");
     cfg.L = parse_double(optional(kv, "L", ""), "L");
 
+    cfg.kms_display = optional(kv, "kms_display", "");
     cfg.visualization_on = parse_bool(optional(kv, "visualization_on", "false"), "visualization_on");
     cfg.webrtc_on = parse_bool(optional(kv, "webrtc_on", "false"), "webrtc_on");
     cfg.webrtc_port =  parse_int(optional(kv, "webrtc_port", "8080"), "webrtc_port");
