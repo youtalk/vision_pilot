@@ -36,8 +36,9 @@ bool read_preferred_mode(const std::string & drm_dir, int & w, int & h)
   std::sort(connectors.begin(), connectors.end());
   for (const auto & c : connectors) {
     std::ifstream status(c / "status");
-    std::string s;
-    if (!(status >> s) || s != "connected") continue;
+    std::ifstream enabled(c / "enabled");
+    std::string s, e;
+    if (!(status >> s) || s != "connected" || !(enabled >> e) || e != "enabled") continue;
     std::ifstream modes(c / "modes");
     std::string line;
     int mw = 0, mh = 0;
