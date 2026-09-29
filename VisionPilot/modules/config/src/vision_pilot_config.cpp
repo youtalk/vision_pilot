@@ -166,6 +166,11 @@ Config load_vision_pilot_config()
     cfg.visualization_on = parse_bool(optional(kv, "visualization_on", "false"), "visualization_on");
     cfg.webrtc_on = parse_bool(optional(kv, "webrtc_on", "false"), "webrtc_on");
     cfg.webrtc_port =  parse_int(optional(kv, "webrtc_port", "8080"), "webrtc_port");
+    cfg.dashboard_on = parse_bool(optional(kv, "dashboard_on", "false"), "dashboard_on");
+    cfg.dashboard_port = parse_int(optional(kv, "dashboard_port", "8090"), "dashboard_port");
+    cfg.dashboard_device = optional(kv, "dashboard_device", "");
+    cfg.stream_raw_camera =
+        parse_bool(optional(kv, "stream_raw_camera", "false"), "stream_raw_camera");
 
     cfg.rrd_on  = parse_bool(optional(kv, "rrd_on", "false"), "rrd_on");
     cfg.rrd_log = optional(kv, "rrd_log", "visionpilot.rrd");

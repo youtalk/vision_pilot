@@ -14,6 +14,8 @@
 #include <models/inference.hpp>
 #include <planning/planning.hpp>
 #include <visualization/visualization.hpp>
+#include <visualization/dashboard_messages.hpp>
+#include <visualization/dashboard_server.hpp>
 #include <debug/debug_draw.hpp>
 
 #include "camera_interface/v4l2_camera_interface.hpp"
@@ -103,6 +105,24 @@ int main(int argc, char** argv)
     // ── Initialize display ────────────────────────────────────────────────────
     visualization::Visualization visualization({cfg.webrtc_on, cfg.webrtc_port, show_window});
 
+    // ── Dashboard stack endpoint ──────────────────────────────────────────────
+    std::unique_ptr<visualization::DashboardServer> dashboard;
+    visualization::ObjectTracker dashboard_tracker;
+    double dashboard_status_ms = -1e9;
+    if (cfg.dashboard_on)
+    {
+        try
+        {
+            dashboard = std::make_unique<visualization::DashboardServer>(
+                static_cast<uint16_t>(cfg.dashboard_port), cfg.dashboard_device);
+        }
+        catch (const std::exception& e)
+        {
+            VP_ERROR("Dashboard: %s", e.what());
+            return 1;
+        }
+    }
+
     const cv::Size net_size(vm::AutoDrive::NET_W, vm::AutoDrive::NET_H);
     cv::Mat frame, warped, resized;
     bool h_resized_set = false;
@@ -169,8 +189,24 @@ int main(int argc, char** argv)
             vehicle_interface->write(
                 plan.steering.empty() ? 0.0 : plan.steering[1],
                 plan.acceleration);
+            if (dashboard)
+            {
+                const double t_ms = visualization::now_ms();
+                auto msgs = visualization::dashboard::frame(
+                    t_ms, *r, plan, pipeline.H_resized(), dashboard_tracker);
+                if (t_ms - dashboard_status_ms >= 1000.0)
+                {
+                    msgs.push_back(visualization::dashboard::status(
+                        t_ms, *r, cfg.dashboard_device, cfg.speed_limit));
+                    dashboard_status_ms = t_ms;
+                }
+                // ponytail: status rides in one frame per second, so a client that skips
+                // that frame waits for the next second. Send it separately if pages miss it.
+                dashboard->publish(std::move(msgs));
+            }
             cv::Mat viz;  // output visualization image (empty when viz is off)
-            if (cfg.visualization_on)
+            // The raw camera flag streams `resized` as it is: no HUD and no overlay.
+            if (cfg.visualization_on && !cfg.stream_raw_camera)
             {
                 if (debug_viz)
                 {
