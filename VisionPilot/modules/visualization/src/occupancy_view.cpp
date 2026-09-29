@@ -1,5 +1,6 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <visualization/box_projection.hpp>
 #include <visualization/occupancy_view.hpp>
 
 #include <algorithm>
@@ -166,14 +167,6 @@ static bool project_xyz(
 }
 
 // ─── Occupancy vehicle primitives: clean extruded boxes (car vs truck) ────────
-
-static bool detection_looks_like_truck(float width_m, float bbox_w, float bbox_h)
-{
-  if (width_m >= 2.25f) return true;
-  if (width_m >= 1.95f && bbox_h > bbox_w * 0.85f) return true;
-  if (bbox_h > 140.f && bbox_w > 90.f && width_m >= 1.7f) return true;
-  return false;
-}
 
 static cv::Scalar vehicle_paint(int class_id, bool is_truck)
 {
@@ -519,17 +512,6 @@ cv::Mat render(const Scene & scene)
     if (lane_px.size() >= 2) cv::polylines(panel, lane_px, false, kLane, 2, cv::LINE_AA);
   }
 
-  auto px_to_world = [&](float u, float v, float & xw, float & yw) -> bool {
-    if (scene.H_px2world.empty()) return false;
-    std::vector<cv::Point2f> src = {cv::Point2f(u, v)}, dst;
-    cv::perspectiveTransform(src, dst, scene.H_px2world);
-    xw = dst[0].x;
-    yw = dst[0].y;
-    if (!std::isfinite(xw) || !std::isfinite(yw)) return false;
-    if (xw < -2.f || xw > kXMax + 8.f) return false;
-    return true;
-  };
-
   struct Voxel
   {
     float x, y, half_w, half_l;
@@ -541,18 +523,12 @@ cv::Mat render(const Scene & scene)
   std::vector<Voxel> voxels;
   voxels.reserve(scene.detections.size());
   for (const auto & d : scene.detections) {
-    float x_bl = 0, y_bl = 0, x_br = 0, y_br = 0, x_bc = 0, y_bc = 0;
-    const float cx_box = 0.5f * (d.x1 + d.x2);
-    if (!px_to_world(d.x1, d.y2, x_bl, y_bl)) continue;
-    if (!px_to_world(d.x2, d.y2, x_br, y_br)) continue;
-    if (!px_to_world(cx_box, d.y2, x_bc, y_bc)) continue;
-    const float width_m = std::clamp(std::abs(y_bl - y_br), 0.9f, 3.2f);
-    const float bbox_w = std::max(1.f, d.x2 - d.x1);
-    const float bbox_h = std::max(1.f, d.y2 - d.y1);
-    const bool truck = detection_looks_like_truck(width_m, bbox_w, bbox_h);
+    GroundBox g;
+    if (!project_box(scene.H_px2world, d.x1, d.y1, d.x2, d.y2, kXMax + 8.f, g)) continue;
+    const bool truck = g.truck;
     Voxel v;
-    v.x = x_bc;
-    v.y = y_bc - y_shift;
+    v.x = g.x_rear;
+    v.y = g.y - y_shift;
     v.half_l = truck ? 5.0f : 2.25f;
     v.half_w = truck ? 1.20f : 0.90f;
     v.class_id = d.class_id;
