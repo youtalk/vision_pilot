@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 namespace visualization
 {
@@ -11,10 +10,15 @@ namespace
 
 bool px_to_ground(const cv::Mat & H, float u, float v, float max_x_m, float & x, float & y)
 {
-  std::vector<cv::Point2f> src = {cv::Point2f(u, v)}, dst;
-  cv::perspectiveTransform(src, dst, H);
-  x = dst[0].x;
-  y = dst[0].y;
+  // perspectiveTransform writes (0, 0) instead of inf when w is about 0, so divide here.
+  cv::Mat Hd;
+  H.convertTo(Hd, CV_64F);
+  const double w = Hd.at<double>(2, 0) * u + Hd.at<double>(2, 1) * v + Hd.at<double>(2, 2);
+  if (std::abs(w) < 1e-6) return false;
+  x = static_cast<float>(
+    (Hd.at<double>(0, 0) * u + Hd.at<double>(0, 1) * v + Hd.at<double>(0, 2)) / w);
+  y = static_cast<float>(
+    (Hd.at<double>(1, 0) * u + Hd.at<double>(1, 1) * v + Hd.at<double>(1, 2)) / w);
   return std::isfinite(x) && std::isfinite(y) && x >= -2.f && x <= max_x_m;
 }
 

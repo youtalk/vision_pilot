@@ -37,6 +37,7 @@ void test_project_box()
   CHECK(vz::project_box(test_H(), 412, 150, 612, 286, 158.f, g));
   CHECK(g.truck && g.width_m == 3.2f);
   CHECK(!vz::project_box(test_H(), 494, 200, 530, 257, 158.f, g));  // at the horizon: x = 1000 m
+  CHECK(!vz::project_box(test_H(), 494, 200, 530, 256, 158.f, g));  // on the horizon: w = 0
   CHECK(!vz::project_box(test_H(), 494, 200, 530, 250, 158.f, g));  // above it: behind the ego
   CHECK(!vz::project_box(cv::Mat(), 494, 250, 530, 276, 158.f, g));
 }
