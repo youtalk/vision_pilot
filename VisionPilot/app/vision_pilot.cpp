@@ -102,7 +102,7 @@ int main(int argc, char** argv)
 
     // ── Initialize display ────────────────────────────────────────────────────
     visualization::Visualization visualization(
-        {cfg.webrtc_on, cfg.webrtc_port, show_window, cfg.record_dir});
+        {cfg.webrtc_on, cfg.webrtc_port, show_window, cfg.record_dir, cfg.kms_display});
 
     const cv::Size net_size(vm::AutoDrive::NET_W, vm::AutoDrive::NET_H);
     cv::Mat frame, warped, resized;

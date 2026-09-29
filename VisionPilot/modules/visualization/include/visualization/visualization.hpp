@@ -86,6 +86,9 @@ struct Config
     // Non-empty → FrameRecorder writes every frame here instead of displaying
     // or streaming it. Takes precedence over webrtc_on.
     std::string record_dir;
+    // Non-empty: DRM driver name; KmsDisplay shows every frame on that
+    // device's connected DisplayPort monitor. record_dir takes precedence.
+    std::string kms_display;
 };
 
 void init_production_assets(const std::string& icons_dir = "");

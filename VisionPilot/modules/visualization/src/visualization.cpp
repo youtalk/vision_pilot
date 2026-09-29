@@ -6,6 +6,9 @@
 
 #include "visualization/frame_recorder.hpp"
 #include "visualization/local_display.hpp"
+#if defined(ENABLE_KMS_DISPLAY)
+#include "visualization/kms_display.hpp"
+#endif
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -637,7 +640,19 @@ Visualization::Visualization(Config cfg)
 {
   if (!cfg.record_dir.empty()) {
     visual_interface = std::make_unique<FrameRecorder>(cfg.record_dir);
-  } else if (cfg.webrtc_on) {
+    return;
+  }
+#if defined(ENABLE_KMS_DISPLAY)
+  if (!cfg.kms_display.empty()) {
+    visual_interface = std::make_unique<KmsDisplay>(cfg.kms_display);
+    return;
+  }
+#else
+  if (!cfg.kms_display.empty()) {
+    std::fprintf(stderr, "[KmsDisplay] this build has no gstreamer-app; kms_display ignored\n");
+  }
+#endif
+  if (cfg.webrtc_on) {
     visual_interface = std::make_unique<WebRTCStreamer>();
     static_cast<WebRTCStreamer *>(visual_interface.get())->init(cfg.webrtc_port);
   } else {

@@ -45,6 +45,9 @@ struct Config {
     double speed_limit;
     double L;
 
+    // Non-empty: the DRM driver name (rcar-vcon on the X5H). KmsDisplay then
+    // shows every rendered frame on that device's connected DisplayPort monitor.
+    std::string kms_display;
     bool visualization_on = false;
     bool webrtc_on = false;
     int webrtc_port;
