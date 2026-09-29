@@ -9,12 +9,18 @@
 #include <visualization/dashboard_server.hpp>
 #include <visualization/object_tracker.hpp>
 
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/websocket.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <future>
 #include <string>
 #include <thread>
 #include <utility>
@@ -146,6 +152,33 @@ void test_hello_status()
   CHECK(s["stages"]["AutoSteer"] == 7.2 && !s.contains("device"));
 }
 
+// A client that connects after the last publish (a page reload while the loop is stalled) gets
+// `hello` and then the current frame, without waiting for another publish.
+void test_late_client_gets_current_frame()
+{
+  vz::DashboardServer server(18093, "test");
+  server.publish({"X"});
+  std::promise<std::string> got;
+  auto fut = got.get_future();
+  std::thread([&got] {
+    try {
+      boost::asio::io_context ioc;
+      boost::beast::websocket::stream<boost::asio::ip::tcp::socket> ws(ioc);
+      ws.next_layer().connect({boost::asio::ip::make_address("127.0.0.1"), 18093});
+      ws.handshake("127.0.0.1", "/");
+      boost::beast::flat_buffer b;
+      ws.read(b);  // hello
+      b.clear();
+      ws.read(b);
+      got.set_value(boost::beast::buffers_to_string(b.data()));
+    } catch (const std::exception & e) {
+      got.set_value(e.what());
+    }
+  }).detach();
+  CHECK(fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+  CHECK(fut.get() == "X");
+}
+
 // One message of every type, for `python3 -m tools.schema` in adas-dashboard.
 void write_jsonl(const char * path)
 {
@@ -195,6 +228,7 @@ int main(int argc, char ** argv)
   test_tracker();
   test_frame();
   test_hello_status();
+  test_late_client_gets_current_frame();
   if (argc == 2) write_jsonl(argv[1]);
   std::printf("TEST_PASS test_dashboard\n");
   return 0;

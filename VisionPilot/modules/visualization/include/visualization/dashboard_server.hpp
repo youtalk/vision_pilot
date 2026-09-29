@@ -20,8 +20,10 @@ inline double now_ms()
 struct DashboardState;
 
 // WebSocket server for the dashboard's `stack` role, on any request path. Every client gets
-// `hello`, then each frame published after it connected. A slow client skips frames, so
-// publish() never waits for a client.
+// `hello`, then the current frame (when one was published), then each new one. A slow client
+// skips frames, so publish() never waits for a client. The server never reads, so it answers no
+// ping: a client must not rely on keepalive pings (browsers send none; Python websockets clients
+// pass ping_interval=None).
 class DashboardServer
 {
 public:
