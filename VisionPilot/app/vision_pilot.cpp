@@ -132,7 +132,7 @@ int main(int argc, char** argv)
     }
 
     // ── Initialize display ────────────────────────────────────────────────────
-    visualization::Visualization visualization({cfg.webrtc_on, cfg.webrtc_port, show_window});
+    visualization::Visualization visualization({cfg.webrtc_on, cfg.webrtc_port, show_window, cfg.kms_display});
 
     // ── Dashboard stack endpoint ──────────────────────────────────────────────
     std::unique_ptr<visualization::DashboardServer> dashboard;
