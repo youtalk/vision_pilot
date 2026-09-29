@@ -2,11 +2,13 @@
 // Run: test_dashboard [OUT.jsonl]   or   test_dashboard --serve PORT SECONDS
 #include <opencv2/core.hpp>
 #include <visualization/box_projection.hpp>
+#include <visualization/object_tracker.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 // assert() vanishes under NDEBUG, so the checks use their own macro.
 #define CHECK(c)                                                                 \
@@ -42,6 +44,18 @@ void test_project_box()
   CHECK(!vz::project_box(cv::Mat(), 494, 250, 530, 276, 158.f, g));
 }
 
+void test_tracker()
+{
+  vz::ObjectTracker t;
+  CHECK((t.update({{10, 0}, {30, 3}}) == std::vector<int>{0, 1}));
+  CHECK((t.update({{31, 3}, {11, 0}}) == std::vector<int>{1, 0}));   // by position, not order
+  CHECK((t.update({{11, 0}, {50, -3}}) == std::vector<int>{0, 2}));  // beyond the 3 m gate
+  for (int i = 0; i < 5; ++i) t.update({});
+  CHECK((t.update({{11, 0}}) == std::vector<int>{0}));  // kept through 5 missed frames
+  for (int i = 0; i < 6; ++i) t.update({});
+  CHECK((t.update({{11, 0}}) == std::vector<int>{3}));  // dropped at the 6th
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
@@ -49,6 +63,7 @@ int main(int argc, char ** argv)
   (void)argc;
   (void)argv;
   test_project_box();
+  test_tracker();
   std::printf("TEST_PASS test_dashboard\n");
   return 0;
 }

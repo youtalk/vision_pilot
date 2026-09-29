@@ -32,6 +32,7 @@ add_library(visualization
         src/local_display.cpp
 #        src/debug_draw.cpp
         src/box_projection.cpp
+        src/object_tracker.cpp
         ${VIS_SOURCES}
 )
 
