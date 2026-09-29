@@ -154,6 +154,17 @@ void test_hello_status()
 
 // A client that connects after the last publish (a page reload while the loop is stalled) gets
 // `hello` and then the current frame, without waiting for another publish.
+void test_invalid_device_fails_at_construction()
+{
+  bool threw = false;
+  try {
+    vz::DashboardServer server(18094, "\xff");  // not UTF-8, so hello cannot be encoded
+  } catch (const std::exception &) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void test_late_client_gets_current_frame()
 {
   vz::DashboardServer server(18093, "test");
@@ -228,6 +239,7 @@ int main(int argc, char ** argv)
   test_tracker();
   test_frame();
   test_hello_status();
+  test_invalid_device_fails_at_construction();
   test_late_client_gets_current_frame();
   if (argc == 2) write_jsonl(argv[1]);
   std::printf("TEST_PASS test_dashboard\n");

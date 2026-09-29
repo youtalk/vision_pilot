@@ -24,7 +24,7 @@ using tcp = net::ip::tcp;
 // thread never outlives the data it reads.
 struct DashboardState
 {
-  std::string device;
+  std::string hello;  // built once at construction, so a bad device fails at startup
   net::io_context ioc{1};
   tcp::acceptor acceptor{ioc};
   std::atomic<bool> running{true};
@@ -43,7 +43,7 @@ void serve_client(std::shared_ptr<DashboardState> s, tcp::socket socket)
     websocket::stream<tcp::socket> ws(std::move(socket));
     ws.accept();
     ws.text(true);
-    ws.write(net::buffer(dashboard::hello(now_ms(), s->device)));
+    ws.write(net::buffer(s->hello));
     uint64_t sent = 0;  // the current frame, if one exists, goes out right after hello
     while (s->running) {
       std::vector<std::string> frame;
@@ -68,12 +68,15 @@ void accept_loop(std::shared_ptr<DashboardState> s)
     tcp::socket socket(s->ioc);
     boost::system::error_code ec;
     s->acceptor.accept(socket, ec);
-    if (ec == net::error::would_block) {
+    if (ec) {  // would block, or an error such as EMFILE: wait instead of spinning a core
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
       continue;
     }
-    if (ec) continue;
-    std::thread(serve_client, s, std::move(socket)).detach();
+    try {
+      std::thread(serve_client, s, std::move(socket)).detach();
+    } catch (const std::exception &) {
+      // Out of threads: this connection is dropped, and the driving stack keeps running.
+    }
   }
 }
 
@@ -82,7 +85,7 @@ void accept_loop(std::shared_ptr<DashboardState> s)
 DashboardServer::DashboardServer(uint16_t port, std::string device)
 : state_(std::make_shared<DashboardState>())
 {
-  state_->device = std::move(device);
+  state_->hello = dashboard::hello(now_ms(), device);  // throws on a non-UTF-8 device
   const tcp::endpoint ep(tcp::v4(), port);
   state_->acceptor.open(ep.protocol());
   state_->acceptor.set_option(net::socket_base::reuse_address(true));
