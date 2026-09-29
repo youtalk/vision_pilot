@@ -28,10 +28,11 @@ static bool same(const KmsRect & r, int x, int y, int w, int h)
 
 static void connector(
   const fs::path & drm, const std::string & name, const std::string & status,
-  const std::string & modes)
+  const std::string & modes, const std::string & enabled = "enabled")
 {
   fs::create_directories(drm / name);
   std::ofstream(drm / name / "status") << status << "\n";
+  std::ofstream(drm / name / "enabled") << enabled << "\n";
   std::ofstream(drm / name / "modes") << modes;
 }
 
@@ -84,6 +85,12 @@ int main()
   const fs::path d = root / "d";
   connector(d, "card0-HDMI-A-1", "connected", "1920x1080\n");
   CHECK(!read_preferred_mode(d.string(), w, h));
+
+  // Connected, but no CRTC drives it yet (the kernel console has not lit
+  // it). kmssink would then set a mode itself, which the sink must never do.
+  const fs::path e = root / "e";
+  connector(e, "card0-DP-1", "connected", "3440x1440\n", "disabled");
+  CHECK(!read_preferred_mode(e.string(), w, h));
 
   fs::remove_all(root);
   if (failures == 0) std::printf("TEST_PASS test_kms_layout\n");
