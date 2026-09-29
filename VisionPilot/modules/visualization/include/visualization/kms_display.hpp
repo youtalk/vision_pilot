@@ -23,9 +23,12 @@ namespace visualization
 //
 // The display is never allowed to stop VisionPilot. With no connected monitor,
 // or after any pipeline error, render_frame() drops the frame and returns true,
-// and the sink tries again at most once every kRetry. A monitor that was
-// asleep when VisionPilot started therefore shows the HUD a few seconds after
-// it wakes. appsrc keeps at most two frames and drops the oldest, so a slow
+// and the sink tries again at most once every kRetry. A monitor that is
+// unplugged when VisionPilot starts therefore shows the HUD a few seconds after
+// it is plugged in. A monitor that sleeps or is re-plugged while the sink runs
+// does not come back: its wake is a long HPD, the sink holds DRM master, and
+// the kernel console defers the hotplug modeset that would train the link
+// again. appsrc keeps at most two frames and drops the oldest, so a slow
 // display drops frames instead of stalling the inference loop.
 class KmsDisplay : public VisualInterface
 {
