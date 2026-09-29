@@ -15,7 +15,7 @@ pkg_check_modules(WEBCONN IMPORTED_TARGET
         gstreamer-webrtc-1.0
 )
 
-find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp)
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp REQUIRED)
 
 if (WEBCONN_FOUND AND Boost_FOUND AND NLOHMANN_JSON_INCLUDE_DIR)
     set(WEBRTC_DEPS_FOUND TRUE)
@@ -33,8 +33,11 @@ add_library(visualization
         src/local_display.cpp
         src/box_projection.cpp
         src/object_tracker.cpp
+        src/dashboard_messages.cpp
         ${VIS_SOURCES}
 )
+
+target_include_directories(visualization PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
 
 if (ENABLE_OCCUPANCY)
     target_sources(visualization PRIVATE
