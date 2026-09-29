@@ -6,13 +6,18 @@
 #include <opencv2/core.hpp>
 #include <visualization/box_projection.hpp>
 #include <visualization/dashboard_messages.hpp>
+#include <visualization/dashboard_server.hpp>
 #include <visualization/object_tracker.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 // assert() vanishes under NDEBUG, so the checks use their own macro.
@@ -154,10 +159,38 @@ void write_jsonl(const char * path)
   out << vz::dashboard::status(1.0, sample_frame(), "test", 12.0) << "\n";
 }
 
+// Publishes the sample frame at 100 Hz, ten times the bench rate, for `seconds`. Fails when one
+// publish() took 5 ms or more, which means a client was able to stall the inference loop.
+int serve(uint16_t port, int seconds)
+{
+  vz::DashboardServer server(port, "test");
+  vz::ObjectTracker tracker;
+  const vm::InferenceFrameResult r = sample_frame();
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+  double worst_ms = 0.0;
+  int n = 0;
+  while (std::chrono::steady_clock::now() < end) {
+    const double t = vz::now_ms();
+    auto msgs = vz::dashboard::frame(t, r, Plan{0.0, {}, {}}, test_H(), tracker);
+    if (n % 100 == 0) msgs.push_back(vz::dashboard::status(t, r, "test", 12.0));
+    const auto p0 = std::chrono::steady_clock::now();
+    server.publish(std::move(msgs));
+    const std::chrono::duration<double, std::milli> took = std::chrono::steady_clock::now() - p0;
+    worst_ms = std::max(worst_ms, took.count());
+    ++n;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  std::printf("SERVE_DONE frames=%d worst_publish_ms=%.3f\n", n, worst_ms);
+  return worst_ms < 5.0 ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
 {
+  if (argc == 4 && std::string(argv[1]) == "--serve") {
+    return serve(static_cast<uint16_t>(std::atoi(argv[2])), std::atoi(argv[3]));
+  }
   test_project_box();
   test_tracker();
   test_frame();

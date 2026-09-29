@@ -34,6 +34,7 @@ add_library(visualization
         src/box_projection.cpp
         src/object_tracker.cpp
         src/dashboard_messages.cpp
+        src/dashboard_server.cpp
         ${VIS_SOURCES}
 )
 
@@ -44,6 +45,8 @@ if(BUILD_TESTING)
 endif()
 
 target_include_directories(visualization PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
+target_include_directories(visualization PRIVATE ${Boost_INCLUDE_DIRS})
+target_link_libraries(visualization PRIVATE Boost::system)
 
 if (ENABLE_OCCUPANCY)
     target_sources(visualization PRIVATE
