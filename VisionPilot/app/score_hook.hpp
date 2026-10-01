@@ -21,7 +21,8 @@ public:
     bool enabled() const { return handle_ != nullptr; }
     void frame_begin();
     // Frame time in ms. Reports running once, after the first frame that
-    // produced output (the offload gate has passed by then).
+    // produced output (the offload gate has passed by then). A failed report
+    // is retried on the next frame that produces output.
     double frame_end(bool produced_output);
 
 private:

@@ -33,8 +33,8 @@ namespace vm = visionpilot::models;
 namespace vd = visionpilot::debug;
 
 namespace {
-// D-slow fault injection. VisionPilot is PID 1 in its container, and the
-// kernel drops a signal that PID 1 has no handler for.
+// D-slow fault injection. SIGUSR1's default action ends the process, so
+// without this handler the slow fault would turn into a kill.
 volatile std::sig_atomic_t g_slow = 0;
 void on_usr1(int) { g_slow = 1; }
 

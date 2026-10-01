@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -69,8 +70,12 @@ double ScoreHook::frame_end(bool produced_output)
         end_();
         if (produced_output && !reported_)
         {
-            running_();
-            reported_ = true;
+            reported_ = running_() == 0;
+            if (!reported_)
+            {
+                // VP_ERROR's format; the test target has no logging include path.
+                std::fprintf(stderr, "[ERROR] S-CORE: score_vp_report_running failed, retrying\n");
+            }
         }
     }
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_).count();

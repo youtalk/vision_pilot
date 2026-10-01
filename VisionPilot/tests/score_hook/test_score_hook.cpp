@@ -36,6 +36,16 @@ int main()
         CHECK(calls(0) == 1 && max() == 80);
         CHECK(calls(1) == 1);
         CHECK(calls(2) == 3 && calls(3) == 3);
+        // 2b. A failed running report is retried on the next produced frame.
+        auto fail_running = reinterpret_cast<void (*)(int)>(dlsym(lib, "fake_fail_running"));
+        ScoreHook r;
+        fail_running(1);
+        r.frame_begin(); r.frame_end(true);
+        CHECK(calls(1) == 2);
+        r.frame_begin(); r.frame_end(true);
+        CHECK(calls(1) == 3);
+        r.frame_begin(); r.frame_end(true);
+        CHECK(calls(1) == 3);
     }
     // 3. IDENTIFIER without SCORE_VP_FRAME_MAX_MS: fail loud.
     unsetenv("SCORE_VP_FRAME_MAX_MS");
