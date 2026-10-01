@@ -1,5 +1,6 @@
 // VisionPilot — preprocess → inference → fusion → display
 #include <chrono>
+#include <csignal>
 #include <memory>
 #include <string>
 #include <thread>
@@ -19,6 +20,7 @@
 #include "camera_interface/v4l2_camera_interface.hpp"
 #include "camera_interface/file_interface.hpp"
 #include "vehicle_interface/file_interface.hpp"
+#include "score_hook.hpp"
 
 #if ENABLE_ROS2_INTERFACE
 #include <rclcpp/rclcpp.hpp>
@@ -29,6 +31,24 @@
 namespace ve = visionpilot::engine;
 namespace vm = visionpilot::models;
 namespace vd = visionpilot::debug;
+
+namespace {
+// D-slow fault injection. VisionPilot is PID 1 in its container, and the
+// kernel drops a signal that PID 1 has no handler for.
+volatile std::sig_atomic_t g_slow = 0;
+void on_usr1(int) { g_slow = 1; }
+
+// rclcpp::init handles SIGTERM by shutting the ROS context down; the loop
+// has to look at it, or a stop waits out podman's 10 s SIGKILL.
+bool keep_running()
+{
+#if ENABLE_ROS2_INTERFACE
+    return rclcpp::ok();
+#else
+    return true;
+#endif
+}
+}  // namespace
 
 int main(int argc, char** argv)
 {
@@ -48,6 +68,15 @@ int main(int argc, char** argv)
         const std::string arg(argv[i]);
         if (arg == "--debug-viz") debug_viz = true;
         else if (arg == "--no-window") show_window = false;
+    }
+
+    std::signal(SIGUSR1, on_usr1);
+    std::unique_ptr<ScoreHook> score;
+    try { score = std::make_unique<ScoreHook>(); }
+    catch (const std::exception& e)
+    {
+        VP_ERROR("S-CORE: %s", e.what());
+        return 1;
     }
 
     std::shared_ptr<CameraInterface> camera_interface;
@@ -107,7 +136,7 @@ int main(int argc, char** argv)
     cv::Mat frame, warped, resized;
     bool h_resized_set = false;
     cv::Mat H = load_matrix("H.yaml", "H");
-    while (true)
+    while (keep_running())
     {
         auto [ok, frame] = camera_interface->get_latest_frame();
         if (!ok || frame.empty())
@@ -116,6 +145,9 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
+
+        score->frame_begin();
+        bool produced = false;
 
         preprocessor.preprocess(frame, warped, resized, net_size);
         cv::Size frame_size = frame.size();
@@ -135,6 +167,7 @@ int main(int argc, char** argv)
         if (const auto r = pipeline.process(warped, resized,
                                             static_cast<float>(ego_v), true))
         {
+            produced = true;
             pipeline.latency().print();
 
             const double cte = r->lateral.cte_m;
@@ -168,6 +201,8 @@ int main(int argc, char** argv)
                 cipo_dist,
                 r->cipo.velocity_ms);
 
+            if (g_slow)
+                std::this_thread::sleep_for(std::chrono::milliseconds(cfg.fault_inject_delay_ms));
             vehicle_interface->write(
                 plan.steering.empty() ? 0.0 : plan.steering[1],
                 plan.acceleration);
@@ -198,6 +233,7 @@ int main(int argc, char** argv)
         {
             visualization.render_frame(display_frame);
         }
+        VP_INFO("frame_ms=%.1f", score->frame_end(produced));
     }
 
     if (cfg.rrd_on) logging::Rerun::shutdown();  // flush & close .rrd

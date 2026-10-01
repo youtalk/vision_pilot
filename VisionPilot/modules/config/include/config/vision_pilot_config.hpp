@@ -53,6 +53,10 @@ struct Config {
     // .rrd recording ready to open in Rerun viewer.
     bool        rrd_on  = false;
     std::string rrd_log = "visionpilot.rrd";
+
+    // Fault injection for the S-CORE D-slow scenario: after SIGUSR1, every
+    // frame waits this long before it publishes.
+    int fault_inject_delay_ms = 200;
 };
 
 static std::string find_config(const std::string& filename) {

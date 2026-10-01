@@ -1,5 +1,6 @@
 add_executable(VisionPilot
         vision_pilot.cpp
+        score_hook.cpp
 )
 
 set_target_properties(VisionPilot PROPERTIES
@@ -34,6 +35,9 @@ target_link_libraries(VisionPilot
     visualization
     vp_debug         # Debug annotate_frame
 )
+
+# dlopen for the optional S-CORE hook (score_hook.cpp).
+target_link_libraries(VisionPilot PRIVATE ${CMAKE_DL_LIBS})
 
 # Suppress unresolved-symbol errors from system shared libs (gdal→curl, ICU from miniforge3)
 # that are pulled in transitively by opencv_viz; we never use viz ourselves.

@@ -178,6 +178,7 @@ Config load_vision_pilot_config()
 
     cfg.rrd_on  = parse_bool(optional(kv, "rrd_on", "false"), "rrd_on");
     cfg.rrd_log = optional(kv, "rrd_log", "visionpilot.rrd");
+    cfg.fault_inject_delay_ms = parse_int(optional(kv, "fault.inject_delay_ms", "200"), "fault.inject_delay_ms");
 
     { const std::string raw = optional(kv, "debug.wheel_dir", "");
       cfg.wheel_dir = raw.empty() ? "" : expand_home(raw); }
