@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Gate D6 on rog-amd, three modes:
+# Gate D6 on rog-amd, four modes:
 #   standin  bench rehearsal, no board: VisionPilot runs here, a stand-in
 #            publishes the CR52 ramp (Task 7 of the phase 2 plan)
-#   kill     full stack: VisionPilot on board 1; si_fault.sh kill (700 ms budget)
+#   kill     full stack: VisionPilot on the board; si_fault.sh kill (700 ms budget)
+#   slow     full stack: si_fault.sh slow, VisionPilot runs late (1300 ms budget)
 #   channel  full stack: si_fault.sh channel, fault=1 on rpmsg-si (200 ms budget)
-#   run-d6.sh <package-dir> <standin|kill|channel>
+#   run-d6.sh <package-dir> <standin|kill|slow|channel>
 # Markers: SI_FAULT_INJECTED ... then SI_STOP_PASS ... | SI_STOP_FAIL reason=<slug>
 #
 # Timing: FAULT_AT is fixed to "now + DRIVE_S" BEFORE d6-gate starts, and
@@ -13,7 +14,7 @@
 # has even subscribed, and the gate misses the samples it exists to measure.
 # Driving time and the gate's subscription warm-up now overlap on purpose.
 set -uo pipefail
-PKG="${1:?package dir}"; MODE="${2:?standin|kill|channel}"; here=$(cd "$(dirname "$0")" && pwd)
+PKG="${1:?package dir}"; MODE="${2:?standin|kill|slow|channel}"; here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$here/route.env"
 LOG=/tmp/d6-$(date +%Y%m%d-%H%M%S); mkdir -p "$LOG/snaps"
@@ -24,7 +25,9 @@ case "$MODE" in
   # board. A container cold start (v0 sample, docker rm, cold docker run)
   # must not read as a firmware latency failure. The real 700 ms budget is
   # measured on hardware in a later task.
-  standin) BUDGET="${STANDIN_BUDGET:-5000}" ;; kill) BUDGET=700 ;; channel) BUDGET=200 ;;
+  # slow: the launch manager stops VisionPilot about 0.65 s after the fault and
+  # the CR52 trips 0.5 s after the last heartbeat; board 2 measured 1130-1220 ms.
+  standin) BUDGET="${STANDIN_BUDGET:-5000}" ;; kill) BUDGET=700 ;; slow) BUDGET=1300 ;; channel) BUDGET=200 ;;
   *) echo "SI_STOP_FAIL reason=bad_args"; exit 1 ;;
 esac
 
@@ -74,8 +77,13 @@ if [ "$MODE" = standin ]; then
     sleep 2
   done
 fi
-# In kill/channel mode VisionPilot runs on the board; the operator confirmed
-# X5H_DEMO_UP units=5 before calling this script.
+# In the other modes VisionPilot runs on the board under the S-CORE launch
+# manager. Reset the board only now, once the bridge publishes camera frames:
+# the launch manager falls back if VisionPilot sees no frame for 60 s.
+if [ "$MODE" != standin ]; then
+  bash "$here/si_fault.sh" reset | tee "$LOG/reset.txt"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || fail board_reset
+fi
 
 # FAULT_AT is fixed NOW, before d6-gate starts, and handed to it as
 # --fault-at so the gate can warm up its subscriptions before the fault
@@ -122,7 +130,7 @@ case "$MODE" in
     # t= is the instant the gate measures from (--fault-at) in every mode;
     # fired= is when the fault actually landed. si_fault.sh prints the same pair.
     echo "SI_FAULT_INJECTED mode=standin t=$FAULT_AT fired=$(date +%s.%N) v0=$v0" ;;
-  kill|channel)
+  kill|slow|channel)
     bash "$here/si_fault.sh" "$MODE" "$FAULT_AT" | tee "$LOG/fault.txt"
     rc=${PIPESTATUS[0]}
     [ "$rc" -eq 0 ] || fail fault_not_injected ;;

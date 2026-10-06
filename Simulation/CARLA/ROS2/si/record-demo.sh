@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Record one kill-route run as the five streams the demo video is composed from,
+# Record one fault run as the five streams the demo video is composed from,
 # and leave behind one self-describing run directory.
 #
-#   record-demo.sh <package-dir> [--run-dir <dir>] [--capture <file>] [--device <dev>]
+#   record-demo.sh <package-dir> [--route kill|slow] [--run-dir <dir>]
+#                  [--capture <file>] [--device <dev>]
 #
 # This is NOT a gate. It prints no gate marker of its own, and it passes
 # run-d6.sh's own output, including its SI_STOP_PASS or SI_STOP_FAIL verdict,
@@ -18,6 +19,7 @@
 #   trace.csv         si_stop_gate.py, via run-d6.sh, copied in at the end
 #
 # Options, each with an environment default:
+#   --route     DEMO_ROUTE     kill; or slow, the S-CORE health monitor route
 #   --run-dir   DEMO_RUN_DIR   /tmp/demo-reel-<run id>
 #   --capture   CR52_CAPTURE   /tmp/<device basename>.log, the tio capture that
 #                              is ALREADY running on the console tty
@@ -37,8 +39,10 @@ RUN_ID=$(date +%Y%m%d-%H%M%S)
 CR52_DEV="${CR52_DEV:-/dev/x5h2-cr52}"
 CAPTURE="${CR52_CAPTURE:-}"
 RUN="${DEMO_RUN_DIR:-}"
+ROUTE="${DEMO_ROUTE:-kill}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --route) ROUTE="${2:?route}"; shift 2 ;;
     --run-dir) RUN="${2:?run dir}"; shift 2 ;;
     --capture) CAPTURE="${2:?capture file}"; shift 2 ;;
     --device) CR52_DEV="${2:?device}"; shift 2 ;;
@@ -46,6 +50,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 RUN="${RUN:-/tmp/demo-reel-$RUN_ID}"
+case "$ROUTE" in kill|slow) ;; *) echo "DEMO_REC_FAIL reason=bad_route"; exit 1 ;; esac
 # The capture defaults to a name derived from the device, because the two are
 # always set as a pair on this bench: passing only one of them is how a run ends
 # up stamping board 1's console onto board 2's video.
@@ -54,11 +59,12 @@ GROW_S="${DEMO_GROW_S:-5}"
 DRIVE_S="${DRIVE_S:-40}"
 IMG="${VP_IMAGE:-visionpilot:si}"
 CARLA_PYTHON="${CARLA_PYTHON:-$HOME/carla-venv/bin/python}"
-# Both recorders must outlive the gate: run-d6.sh fires the fault DRIVE_S after
-# the bridge is up and si_stop_gate.py then measures for 30 s. They are stopped
+# Both recorders must outlive the gate: run-d6.sh resets the board once the
+# bridge is up (up to 60 s), fires the fault DRIVE_S later, and si_stop_gate.py
+# then measures for 30 s. They are stopped
 # by signal as soon as run-d6.sh returns, so this is only a backstop for a
 # driver that dies before it gets there.
-REC_S=$((DRIVE_S + 90))
+REC_S=$((DRIVE_S + 120))
 
 mkdir -p "$RUN/chase" "$RUN/camera" "$RUN/hud" || { echo "DEMO_REC_FAIL reason=bad_run_dir"; exit 1; }
 fail() { echo "DEMO_REC_FAIL reason=$1 dir=$RUN"; exit 1; }
@@ -85,22 +91,13 @@ sleep "$GROW_S"
 after=$(wc -c < "$CAPTURE")
 [ "$after" -gt "$before" ] || fail console_not_growing
 
-# VisionPilot has to be running, and its HUD directory empty, BEFORE the run.
-# The kill route stops the unit and nothing restarts it, so the recording after
-# a recording starts with no VisionPilot at all and captures a car that never
-# moves, with a HUD directory still full of the previous run's frames. Both were
-# measured on the bench 2026-09-18 and cost a run. Waiting for a Latency line
-# rather than for is-active is deliberate: the unit is active while the NPU
-# model is still loading, which takes about twenty seconds.
+# The HUD directory has to be empty BEFORE the run, or the recording carries the
+# previous run's frames (bench-measured 2026-09-18, it cost a run). Stop the
+# S-CORE launch manager first, so no VisionPilot writes into it while it is
+# emptied. run-d6.sh starts a fresh VisionPilot with the booth reset once CARLA
+# sends frames.
 if [ -n "${X5H_BOARD:-}" ]; then
-  ssh "$X5H_BOARD" "rm -f /opt/npu/video/hud/frame_*.png; systemctl start x5h-vp.service" || fail board_prep
-  vp_ready=0
-  for _ in $(seq 1 60); do
-    vp_ready=$(ssh "$X5H_BOARD" "journalctl -u x5h-vp -n 40 --no-pager -o cat | grep -c 'Latency.*wall='" 2>/dev/null || echo 0)
-    [ "${vp_ready:-0}" -gt 0 ] && break
-    sleep 2
-  done
-  [ "${vp_ready:-0}" -gt 0 ] || fail vp_not_inferring
+  ssh "$X5H_BOARD" "systemctl stop score-lm.service && rm -f /opt/npu/video/hud/frame_*.png" || fail board_prep
 fi
 
 python3 "$here/stamp_console.py" "$CAPTURE" > "$RUN/cr52-console.txt" 2> "$RUN/stamp.log" &
@@ -119,7 +116,7 @@ done
 # spawns the hero, so neither CARLA-side recorder can attach before it runs. The
 # recorders go up as soon as the server is, and well before FAULT_AT, which
 # run-d6.sh does not fix until the bridge has come up after CARLA_SERVER_UP.
-( bash "$here/run-d6.sh" "$PKG" kill 2>&1 | tee "$RUN/run-d6.txt" ) &
+( bash "$here/run-d6.sh" "$PKG" "$ROUTE" 2>&1 | tee "$RUN/run-d6.txt" ) &
 d6_pid=$!
 for _ in $(seq 1 180); do
   n=$(grep -c '^CARLA_SERVER_UP' "$RUN/run-d6.txt" 2>/dev/null || true)
@@ -190,6 +187,6 @@ for stream in chase camera; do
 done
 [ -s "$RUN/cr52-console.txt" ] || fail console_empty
 
-python3 "$here/demo_streams.py" --run-id "$RUN_ID" --mode kill --fault-at "$fault_at" \
+python3 "$here/demo_streams.py" --run-id "$RUN_ID" --mode "$ROUTE" --fault-at "$fault_at" \
   > "$RUN/manifest.json" || fail manifest
 echo "DEMO_REC_DONE streams=5 dir=$RUN"

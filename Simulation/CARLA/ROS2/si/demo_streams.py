@@ -28,7 +28,7 @@ INDEX_HEADER = "file,bench_time"
 
 # The routes run-d6.sh drives. A typo here would mislabel the reel rather than
 # fail it, and the label is what tells two otherwise identical videos apart.
-MODES = ("kill", "channel", "standin")
+MODES = ("kill", "slow", "channel", "standin")
 
 # Epoch seconds on this bench are about 1.79e9. Anything below this is a
 # relative time that leaked in where an absolute one belongs (a DRIVE_S, a
