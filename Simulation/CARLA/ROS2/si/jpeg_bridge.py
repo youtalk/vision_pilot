@@ -22,6 +22,7 @@ Prints JPEG_BRIDGE ready in=<topic> out=<topic> quality=<q> then
 JPEG_BRIDGE n=<frames> mean_kib=<size> every hundred frames.
 """
 import argparse
+import os
 import sys
 
 import cv2
@@ -50,6 +51,22 @@ def to_bgr(data, height, width, encoding):
         return cv2.cvtColor(frame.reshape(height, width, 3), cv2.COLOR_RGB2BGR)
     raise ValueError(f"unsupported encoding {encoding}")
 
+
+# Each JPEG frame is about 160 KB. Under the bench file's MaxMessageSize
+# 65500B, CycloneDDS sends it as three 64 KB UDP datagrams, and IP splits each
+# into about 45 fragments on the 1500-byte LAN. One lost fragment holds its
+# 64 KB reassembly queue on the board for ipfrag_time (30 s). Once the queues
+# fill ipfrag_high_thresh (4 MB), the board drops nearly every new fragment,
+# VisionPilot falls to 1-2 frames a second and the Safety Island stops the car
+# on a stale heartbeat (board 2, 2026-10-06). RTPS messages of 1400 bytes never
+# fragment at the IP layer, and a lost one costs one DDS resend.
+LAN_SAFE = ('<Domain id="any"><General><MaxMessageSize>1400B</MaxMessageSize>'
+            '</General></Domain>')
+
+
+def lan_safe_uri(uri):
+    """CYCLONEDDS_URI with this process's messages capped below the LAN MTU."""
+    return ",".join(part for part in (uri, LAN_SAFE) if part)
 
 class JpegBridge(Node):
     def __init__(self, topic_in, topic_out, quality):
@@ -97,6 +114,7 @@ def main():
     if not 1 <= a.quality <= 100:
         print("JPEG_BRIDGE_FAIL reason=bad_quality", flush=True)
         return 1
+    os.environ["CYCLONEDDS_URI"] = lan_safe_uri(os.environ.get("CYCLONEDDS_URI", ""))
     rclpy.init()
     node = JpegBridge(a.topic_in, a.topic_out, a.quality)
     print(f"JPEG_BRIDGE ready in={a.topic_in} out={a.topic_out} "

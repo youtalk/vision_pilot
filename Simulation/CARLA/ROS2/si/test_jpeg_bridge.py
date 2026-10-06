@@ -37,3 +37,12 @@ def test_shape_is_height_then_width():
     out = jb.to_bgr(data, 2, 3, "bgra8")
     assert out.shape == (2, 3, 3)
     assert np.array_equal(out[0][0], np.array([0, 1, 2], dtype=np.uint8))
+
+
+def test_lan_safe_uri_appends_to_the_bench_file():
+    uri = "file:///ws/si/cyclonedds-bench.xml"
+    assert jb.lan_safe_uri(uri) == uri + "," + jb.LAN_SAFE
+
+
+def test_lan_safe_uri_without_a_file():
+    assert jb.lan_safe_uri("") == jb.LAN_SAFE
