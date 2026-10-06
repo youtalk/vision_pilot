@@ -52,7 +52,10 @@ MIN_PRE_FAULT_SPEED = 5.0   # m/s
 #                                achieved 2.82 to 2.83 m/s^2 average, which is
 #                                1.2 times the theoretical distance.
 #
-# That is 14.4 + 28.8 = 43.2 m, rounded up to the next metre. The gate is not
+# That is 14.4 + 28.8 = 43.2 m at the kill route's 700 ms, rounded up to the
+# next metre. The latency term is the gate's own --max-latency-ms, so a route
+# with a longer budget gets the distance it allows: 51 m for the slow route's
+# 1300 ms, where the car runs on for longer by design. The gate is not
 # weakened by it: a lost command, a late one, an arbiter that never switched,
 # or braking that degrades by more than about a fifth all still fail it, and 44
 # still rejects a coast-down that happens to reach zero inside the 30 s window.
@@ -61,20 +64,40 @@ MAX_LATENCY_S = 0.7
 RAMP_S = 0.5
 BRAKE_A = 3.0
 BRAKE_K = 1.2
-MAX_STOP_M = float(math.ceil(
-    CRUISE_MPS * (MAX_LATENCY_S + RAMP_S)
-    + BRAKE_K * CRUISE_MPS ** 2 / (2 * BRAKE_A)
-))
+
+
+def stop_budget_m(max_latency_ms):
+    return float(math.ceil(
+        CRUISE_MPS * (max_latency_ms / 1000.0 + RAMP_S)
+        + BRAKE_K * CRUISE_MPS ** 2 / (2 * BRAKE_A)
+    ))
+
+
+MAX_STOP_M = stop_budget_m(MAX_LATENCY_S * 1000.0)
+
+
+def lane_offsets(points, centre):
+    """Distance from each (x, y) point to the polyline centre [(x, y), ...]."""
+    def seg(p, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        n = dx * dx + dy * dy
+        u = 0.0 if n == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / n))
+        return math.hypot(p[0] - a[0] - u * dx, p[1] - a[1] - u * dy)
+    return [min(seg(p, centre[i], centre[i + 1]) for i in range(len(centre) - 1)) for p in points]
 
 
 def verdict(fault_at, raw_stamps, ack, rows, max_latency_ms,
-            min_pre_fault_speed=MIN_PRE_FAULT_SPEED, max_stop_m=MAX_STOP_M,
-            stop_speed=0.05, decel=3.0):
+            min_pre_fault_speed=MIN_PRE_FAULT_SPEED, max_stop_m=None,
+            stop_speed=0.05, decel=3.0, lane=None):
     """The one SI_STOP_ marker line for a run.
 
     rows are (t, x, y, speed) from the gate's own start, which is about DRIVE_S
     before the fault, so the pre-fault samples are there to be judged.
+    lane is (centre line, half width) of the lane the ego was in at the fault,
+    or None to leave the lane unjudged.
     """
+    if max_stop_m is None:
+        max_stop_m = stop_budget_m(max_latency_ms)
     # A car that never moved satisfies "stopped" at sample zero, so without
     # this it passes the gate with stop_distance_m=0.00, which a person reads
     # as "the Safety Island stopped the car in 8 ms".
@@ -104,6 +127,15 @@ def verdict(fault_at, raw_stamps, ack, rows, max_latency_ms,
     d, t_stop = stop_distance([r for r in rows if r[0] >= fault_at], stop_speed)
     if d is None:
         return f"SI_STOP_FAIL reason=no_stop first_cr52_cmd_ms={latency_ms:.0f}"
+    # The stop has to stay in the lane it started in. The car's centre more than
+    # half a lane width from that lane's centre line has crossed the lane line:
+    # on the bench route 16 of 17 stops did, on a curve, before this was checked.
+    if lane is not None:
+        post = [(r[1], r[2]) for r in rows if fault_at <= r[0] <= t_stop]
+        worst = max(lane_offsets(post, lane[0]))
+        if worst > lane[1]:
+            return (f"SI_STOP_FAIL reason=left_lane max_lane_offset_m={worst:.2f} "
+                    f"first_cr52_cmd_ms={latency_ms:.0f} stop_distance_m={d:.2f}")
     if d > max_stop_m:
         # Every sibling FAIL line carries the latency, and the PASS line
         # carries stop_s. Without them this line cannot distinguish a slow

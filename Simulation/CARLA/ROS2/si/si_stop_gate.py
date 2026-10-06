@@ -14,11 +14,19 @@ so --max-latency-ms defaults to 200 but the caller must override it for the
 kill route:
   channel  200 ms. The rpmsg-si channel latches the fault directly, so the
            controller needs no staleness detection.
-  kill     700 ms. Stopping x5h-vp.service is noticed only through heartbeat
+  kill     700 ms. Killing VisionPilot is noticed through heartbeat
            staleness: the firmware trips 0.5 s after the last heartbeat and
            then adds one 0.15 s control cycle. A kill-route run must be
            gated with --max-latency-ms 700, or a correct run reads as a
            failure.
+  lm       800 ms. The launch manager dies and takes VisionPilot with it.
+  slow     1300 ms. The S-CORE health monitor fails the late frame, the
+           launch manager stops VisionPilot, then the heartbeat goes stale.
+The stop-distance budget is derived from the same figure (stop_metrics).
+
+The stop must also stay in its lane. The lane comes from the CARLA map: the
+centre line of the lane the ego was in at the fault. Odometry is in ROS
+coordinates, which are CARLA's with y negated.
 
 first_si_ack_ms is the first /carla/hero/ackermann_control_cmd at or below
 -2.5 m/s^2 after the fault, which is the bench arbiter forwarding the CR52
@@ -36,6 +44,29 @@ from nav_msgs.msg import Odometry
 from autoware_control_msgs.msg import Control
 from ackermann_msgs.msg import AckermannDriveStamped
 from stop_metrics import verdict
+
+CARLA = ("127.0.0.1", 2000)
+
+
+def fault_lane(fault_at, rows, length_m=100):
+    """(centre line, half width) of the ego's lane at the fault, in ROS coordinates."""
+    import carla
+    post = [r for r in rows if r[0] >= fault_at]
+    if not post:
+        return None
+    client = carla.Client(*CARLA)
+    client.set_timeout(10.0)
+    w = client.get_world().get_map().get_waypoint(carla.Location(post[0][1], -post[0][2], 0.5))
+    half = w.lane_width / 2
+    centre = []
+    for _ in range(length_m):
+        loc = w.transform.location
+        centre.append((loc.x, -loc.y))
+        nxt = w.next(1.0)
+        if not nxt:
+            break
+        w = nxt[0]
+    return centre, half
 
 
 class Gate(Node):
@@ -69,7 +100,11 @@ def main():
     end = a.fault_at + a.window
     while time.time() < end:
         rclpy.spin_once(g, timeout_sec=0.1)
-    line = verdict(a.fault_at, g.raw_stamps, g.ack, g.rows, a.max_latency_ms)
+    try:
+        lane = fault_lane(a.fault_at, g.rows)
+        line = verdict(a.fault_at, g.raw_stamps, g.ack, g.rows, a.max_latency_ms, lane=lane)
+    except RuntimeError as exc:     # the CARLA client's timeout
+        line = f"SI_STOP_FAIL reason=no_lane_map {exc}"
     print(line)
     # After the marker, never before it: an unwritable --trace path must not
     # turn a measured verdict into run-d6.sh's gate_no_verdict.

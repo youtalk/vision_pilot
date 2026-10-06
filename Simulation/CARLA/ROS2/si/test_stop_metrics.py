@@ -1,4 +1,6 @@
 """Pure D6 arithmetic. Run: python3 -m pytest test_stop_metrics.py"""
+import pytest
+
 import stop_metrics as s
 
 
@@ -116,3 +118,36 @@ def test_the_stop_budget_clears_the_board_runs_it_was_derived_from():
     # And it is still a gate: the same stop with the latency budget blown would
     # be well past it.
     assert s.MAX_STOP_M < 42.02 + s.CRUISE_MPS * 0.5
+
+
+def test_the_stop_budget_follows_the_latency_budget():
+    # kill 700 ms, lm 800 ms, slow 1300 ms: the car runs unbraked for the
+    # whole latency, so the distance it may travel grows with it.
+    assert [s.stop_budget_m(ms) for ms in (700, 800, 1300)] == [44.0, 45.0, 51.0]
+    assert s.MAX_STOP_M == s.stop_budget_m(700)
+
+
+def test_verdict_judges_the_stop_distance_by_its_own_latency_budget():
+    # Board 2, 2026-10-06: a slow-route stop of 46.26 m, inside 1300 ms.
+    far = _rows(decel=1.8)          # 40 m of braking from 12 m/s
+    assert s.verdict(FAULT, _stamps(FAULT + 1.05), _ack(FAULT + 1.05), far, 1300.0) \
+        .startswith("SI_STOP_PASS")
+    assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), far, 200.0) \
+        .startswith("SI_STOP_FAIL reason=stop_too_far")
+
+
+def test_lane_offsets_measure_the_distance_to_the_centre_line():
+    centre = [(0.0, 0.0), (10.0, 0.0), (20.0, 10.0)]
+    assert s.lane_offsets([(5.0, 1.0), (-3.0, 4.0), (20.0, 10.0)], centre) \
+        == pytest.approx([1.0, 5.0, 0.0])
+
+
+def test_verdict_fails_a_stop_that_leaves_the_lane():
+    # _rows() reaches the fault at x = 240 m and stops 24 m later.
+    straight = ([(0.0, 0.0), (400.0, 0.0)], 1.75)
+    assert s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), _rows(), 200.0,
+                     lane=straight).startswith("SI_STOP_PASS")
+    # The same stop on a lane whose centre line bends away by 1 m in 10 m.
+    bent = ([(0.0, 0.0), (240.0, 0.0), (340.0, 10.0)], 1.75)
+    v = s.verdict(FAULT, _stamps(FAULT + 0.05), _ack(FAULT + 0.05), _rows(), 200.0, lane=bent)
+    assert v.startswith("SI_STOP_FAIL reason=left_lane max_lane_offset_m=2.")
