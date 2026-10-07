@@ -6,12 +6,12 @@
 Prints manifest.json on stdout; record-demo.sh redirects it into the run
 directory.
 
-The demo video is composed by a separate script in openadkit out of five
-streams: two cameras and the CR52 console recorded on this bench host, and
-VisionPilot's HUD frames and journal pulled off the X5H board. The board has no
-RTC and no NTP, so the five streams share no clock and the composer aligns them
-all on the fault instant instead. Everything it needs to do that is the
-per-stream index.csv written here and the manifest below.
+The demo video is composed by a separate script in openadkit out of six
+streams: two cameras, the CR52 console and the board's DLT recorded on this
+bench host, and VisionPilot's HUD frames and journal pulled off the X5H board.
+The board has no RTC and no NTP, so the six streams share no clock and the
+composer aligns them all on the fault instant instead. Everything it needs to
+do that is the per-stream index.csv written here and the manifest below.
 
 Both are a hard interface: a renamed column or key does not degrade the video,
 it makes the composer refuse to compose. That is why they are formatted in one
@@ -75,10 +75,10 @@ def stamp_seconds(sec, nanosec):
 
 
 def build_manifest(run_id, mode, fault_at):
-    """The run's self-description. All five streams are always named.
+    """The run's self-description. All six streams are always named.
 
     hud/ is filled later by the board-side pull script, and console/trace are
-    single files, but the composer looks up all five keys unconditionally: an
+    single files, but the composer looks up all six keys unconditionally: an
     absent key is a KeyError there, while an empty directory is a missing pane
     it can report.
     """
@@ -104,6 +104,7 @@ def build_manifest(run_id, mode, fault_at):
             "hud": {"dir": "hud", "journal": "hud/vp-journal.txt"},
             "console": {"file": "cr52-console.txt"},
             "trace": {"file": "trace.csv"},
+            "dlt": {"file": "dlt.dlt"},
         },
     }
 

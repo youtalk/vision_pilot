@@ -1,6 +1,6 @@
 """The composer interface of the demo recording. Run: python3 -m pytest test_demo_streams.py
 
-Everything here is the part that is wrong silently: the composer aligns five
+Everything here is the part that is wrong silently: the composer aligns six
 streams on times it reads out of index.csv and manifest.json, and a renamed
 column, a lost millisecond or a relative fault_at produces a video that is
 merely out of sync rather than a run that fails.
@@ -140,7 +140,8 @@ FAULT_AT = 1789432100.123
 def test_manifest_has_exactly_the_keys_the_composer_looks_up():
     m = d.build_manifest("20260918-134501", "kill", FAULT_AT)
     assert set(m) == {"run_id", "mode", "fault_at", "streams"}
-    assert set(m["streams"]) == {"chase", "camera", "hud", "console", "trace"}
+    assert set(m["streams"]) == {"chase", "camera", "hud", "console", "trace", "dlt"}
+    assert m["streams"]["dlt"] == {"file": "dlt.dlt"}
     assert m["streams"]["chase"] == {"dir": "chase", "index": "chase/index.csv"}
     assert m["streams"]["camera"] == {"dir": "camera", "index": "camera/index.csv"}
     assert m["streams"]["hud"] == {"dir": "hud", "journal": "hud/vp-journal.txt"}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record one fault run as the five streams the demo video is composed from,
+# Record one fault run as the six streams the demo video is composed from,
 # and leave behind one self-describing run directory.
 #
 #   record-demo.sh <package-dir> [--route kill|slow] [--run-dir <dir>]
@@ -9,7 +9,7 @@
 # run-d6.sh's own output, including its SI_STOP_PASS or SI_STOP_FAIL verdict,
 # straight through.
 #
-# The five streams and who writes them:
+# The six streams and who writes them:
 #   chase/            demo_cam.py here           a chase view of the ego
 #   camera/           record_camera.py here      what the board received
 #   hud/              a pull script in openadkit  VisionPilot's HUD PNGs and its
@@ -17,6 +17,9 @@
 #                     it in the manifest; the pull script fills it afterwards.
 #   cr52-console.txt  stamp_console.py here      the CR52 firmware console
 #   trace.csv         si_stop_gate.py, via run-d6.sh, copied in at the end
+#   dlt.dlt           record_dlt.py here         the board's S-CORE and VisionPilot
+#                     DLT, as the datarouter sends it to UDP 3490. dlt-viewer
+#                     must be closed: it would hold the port.
 #
 # Options, each with an environment default:
 #   --route     DEMO_ROUTE     kill; or slow, the S-CORE health monitor route
@@ -31,7 +34,7 @@
 # its output topic and nothing here starts it.
 #
 # Markers: DEMO_REC_READY once every recorder is up, then
-# DEMO_REC_DONE streams=5 dir=<run dir> or DEMO_REC_FAIL reason=<slug> dir=<dir>.
+# DEMO_REC_DONE streams=6 dir=<run dir> or DEMO_REC_FAIL reason=<slug> dir=<dir>.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 PKG="${1:?package dir}"; shift
@@ -72,10 +75,12 @@ echo "record-demo run_id=$RUN_ID dir=$RUN device=$CR52_DEV capture=$CAPTURE"
 
 stamp_pid=
 cam_pid=
+dlt_pid=
 # shellcheck disable=SC2329  # runs from the EXIT trap below
 cleanup() {
   [ -n "${stamp_pid:-}" ] && kill "$stamp_pid" 2>/dev/null
   [ -n "${cam_pid:-}" ] && kill "$cam_pid" 2>/dev/null
+  [ -n "${dlt_pid:-}" ] && kill "$dlt_pid" 2>/dev/null
   docker rm -f demo-rec-cam > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -111,6 +116,20 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 [ "${n:-0}" -gt 0 ] || fail stamper
+
+# The board's DLT. It has to be up before run-d6.sh resets the board, because
+# the launch manager's start is part of what the reel's DLT strip shows. A
+# port held by an open dlt-viewer is named, not left to read as an empty stream.
+python3 "$here/record_dlt.py" "$RUN/dlt.dlt" --seconds "$REC_S" 2> "$RUN/dlt.log" &
+dlt_pid=$!
+for _ in $(seq 1 10); do
+  n=$(grep -c '^REC_DLT ready' "$RUN/dlt.log" 2>/dev/null || true)
+  [ "${n:-0}" -gt 0 ] && break
+  busy=$(grep -c '^REC_DLT_FAIL reason=port_busy' "$RUN/dlt.log" 2>/dev/null || true)
+  [ "${busy:-0}" -gt 0 ] && fail dlt_port_busy
+  sleep 1
+done
+[ "${n:-0}" -gt 0 ] || fail dlt_recorder
 
 # run-d6.sh owns the simulator: it starts the CARLA server AND the bridge that
 # spawns the hero, so neither CARLA-side recorder can attach before it runs. The
@@ -162,8 +181,10 @@ docker stop -t 20 demo-rec-cam > /dev/null 2>&1
 docker logs demo-rec-cam > "$RUN/camera.log" 2>&1
 kill "$cam_pid" 2>/dev/null; wait "$cam_pid" 2>/dev/null
 kill "$stamp_pid" 2>/dev/null; wait "$stamp_pid" 2>/dev/null
+kill "$dlt_pid" 2>/dev/null; wait "$dlt_pid" 2>/dev/null
 cam_pid=
 stamp_pid=
+dlt_pid=
 
 # FAULT_AT comes out of run-d6.sh and is never recomputed here. si_stop_gate.py
 # already wrote trace.csv with times relative to that exact value, so a second
@@ -186,7 +207,8 @@ for stream in chase camera; do
   [ "${rows:-0}" -gt 1 ] || fail "${stream}_empty"
 done
 [ -s "$RUN/cr52-console.txt" ] || fail console_empty
+[ -s "$RUN/dlt.dlt" ] || fail dlt_empty
 
 python3 "$here/demo_streams.py" --run-id "$RUN_ID" --mode "$ROUTE" --fault-at "$fault_at" \
   > "$RUN/manifest.json" || fail manifest
-echo "DEMO_REC_DONE streams=5 dir=$RUN"
+echo "DEMO_REC_DONE streams=6 dir=$RUN"
