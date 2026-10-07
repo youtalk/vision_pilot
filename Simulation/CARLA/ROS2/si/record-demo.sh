@@ -62,7 +62,7 @@ GROW_S="${DEMO_GROW_S:-5}"
 DRIVE_S="${DRIVE_S:-40}"
 IMG="${VP_IMAGE:-visionpilot:si}"
 CARLA_PYTHON="${CARLA_PYTHON:-$HOME/carla-venv/bin/python}"
-# Both recorders must outlive the gate: run-d6.sh resets the board once the
+# The camera and chase recorders must outlive the gate: run-d6.sh resets the board once the
 # bridge is up (up to 60 s), fires the fault DRIVE_S later, and si_stop_gate.py
 # then measures for 30 s. They are stopped
 # by signal as soon as run-d6.sh returns, so this is only a backstop for a
@@ -120,7 +120,9 @@ done
 # The board's DLT. It has to be up before run-d6.sh resets the board, because
 # the launch manager's start is part of what the reel's DLT strip shows. A
 # port held by an open dlt-viewer is named, not left to read as an empty stream.
-python3 "$here/record_dlt.py" "$RUN/dlt.dlt" --seconds "$REC_S" 2> "$RUN/dlt.log" &
+# It starts before CARLA, so REC_S does not cover it. It is stopped by signal
+# when run-d6.sh returns (and by cleanup() on any exit); 3600 is only a backstop.
+python3 "$here/record_dlt.py" "$RUN/dlt.dlt" --seconds 3600 2> "$RUN/dlt.log" &
 dlt_pid=$!
 for _ in $(seq 1 10); do
   n=$(grep -c '^REC_DLT ready' "$RUN/dlt.log" 2>/dev/null || true)
@@ -182,6 +184,7 @@ docker logs demo-rec-cam > "$RUN/camera.log" 2>&1
 kill "$cam_pid" 2>/dev/null; wait "$cam_pid" 2>/dev/null
 kill "$stamp_pid" 2>/dev/null; wait "$stamp_pid" 2>/dev/null
 kill "$dlt_pid" 2>/dev/null; wait "$dlt_pid" 2>/dev/null
+grep '^REC_DLT n=' "$RUN/dlt.log" | tail -n 1
 cam_pid=
 stamp_pid=
 dlt_pid=
