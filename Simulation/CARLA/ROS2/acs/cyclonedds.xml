@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One host, loopback only: the scenario process and the VisionPilot container
+     (network_mode host) find each other without multicast, and nothing reaches
+     the LAN. Both read it through CYCLONEDDS_URI. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface address="127.0.0.1"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+      <!-- A 1280x720 bgra8 frame is 3.7 MB. -->
+      <MaxMessageSize>65500B</MaxMessageSize>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>32</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="127.0.0.1"/>
+      </Peers>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize min="10MB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

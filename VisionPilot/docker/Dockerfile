@@ -135,6 +135,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ROS2 Jazzy runtime libs — only needed when built with ROS2 support (ENABLE_ROS2=ON).
 # Mirrors the builder-stage install so all transitive apt dependencies (fastrtps,
 # tinyxml2, python3, etc.) are present here too, not just in the builder image.
+# rmw_cyclonedds_cpp is a runtime choice (RMW_IMPLEMENTATION=rmw_cyclonedds_cpp):
+# the Open AD Kit bench and board, and autoware_carla_scenario's ROS 2 ego, speak
+# Cyclone DDS.
 RUN if [ "$ENABLE_ROS2" = "ON" ]; then \
         apt-get update && apt-get install -y --no-install-recommends \
             curl \
@@ -146,13 +149,16 @@ RUN if [ "$ENABLE_ROS2" = "ON" ]; then \
             ros-jazzy-ros-base \
             ros-jazzy-cv-bridge \
             ros-jazzy-image-transport \
+            ros-jazzy-rmw-cyclonedds-cpp \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
 # ROS2 apt packages don't register /opt/ros/jazzy/lib with ldconfig — normally
 # `setup.bash` sets LD_LIBRARY_PATH for you, but ENTRYPOINT runs the binary
 # directly with no shell in between to source it. Set it explicitly instead.
-ENV LD_LIBRARY_PATH="/opt/ros/jazzy/lib:${LD_LIBRARY_PATH}"
+# Cyclone DDS (rmw_cyclonedds_cpp) installs its libddsc under the multiarch
+# directory.
+ENV LD_LIBRARY_PATH="/opt/ros/jazzy/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
 
 RUN mkdir -p /usr/share/visionpilot
 

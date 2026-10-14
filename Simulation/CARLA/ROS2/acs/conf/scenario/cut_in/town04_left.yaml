@@ -1,0 +1,43 @@
+# @package _global_
+#
+# The framework's cut_in/left, pinned to one place on Town04_Opt's highway
+# (README.md, "The Town04 map") and sampled from the ODD rather than swept
+# across the map's lanelets:
+#
+#   uv run scenario --multirun scenario=cut_in/town04_left ... \
+#       +sweep.odd_sample.count=9 +sweep.odd_sample.strategy=coverage
+defaults:
+  - /scenario/cut_in/left
+  - _self_
+
+ego:
+  # Lanelet 79016 (spawn point 5's lane), inside OpenDRIVE road 41.
+  spawn_lanelet_id: 79016
+  spawn_s: 640.0
+
+scenario:
+  npc_lanelet_id: 77298
+  # The NPC's rear bumper 8 m ahead of the ego's front one, along the ego's
+  # lane (autoware_carla_scenario 12.0's vehicle-ahead gap): placed by the
+  # measure itself, so the outer lanelet being the longer does not matter.
+  npc_gap_m: 8.0
+
+controls:
+  vehicle_ahead_gap_m:
+    # Drawn as the measure itself (target: measure), bumper to bumper along
+    # the ego's lane: no calibration offset.
+    key: scenario.npc_gap_m
+    target: measure
+    range: [2.0, 30.0]
+  vehicle_ahead_relative_speed_kph:
+    key: scenario.npc_initial_speed_kmh
+    offset: ${ego.initial_speed_kmh}
+    # Above some 36 km/h CARLA 0.10's TrafficManager does not make the forced
+    # lane change, and the cut-in never happens: up to 5 km/h faster than the ego.
+    range: [-15.0, 5.0]
+    limits: [0.0, null]
+
+sweep:
+  # One place, not every lanelet of the map.
+  constraints: null
+  bindings: null

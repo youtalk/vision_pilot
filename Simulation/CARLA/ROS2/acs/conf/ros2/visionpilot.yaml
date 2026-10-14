@@ -1,0 +1,51 @@
+# @package _global_
+#
+# VisionPilot drives the ego over ROS 2, with autoware_carla_scenario in place of
+# the CARLA-side nodes of ../README.md (the speed publisher and
+# carla_control_publisher), on a CARLA 0.10 server built with or without ROS 2:
+#
+#   uv run scenario hydra.searchpath=[file://$PWD/conf] ros2=visionpilot ...
+#
+# The framework publishes the ego's speed, /clock and the camera in
+# ../config/carla10.json, and applies VisionPilot's steering and acceleration
+# through CARLA's Ackermann controller, as carla_control_publisher does.
+defaults:
+  - default
+  - _self_
+
+ego:
+  # VisionPilot's CARLA rig (../config/carla10.json).
+  vehicle_type: vehicle.lincoln.mkz
+  entity: ros2
+
+server:
+  # Real time at the 0.05 s step: VisionPilot runs on wall-clock, and the camera
+  # (10 Hz) is what paces it.
+  max_tick_rate_hz: 20.0
+
+ros2:
+  domain_id: ${oc.decode:${oc.env:ROS_DOMAIN_ID,0}}
+  # The server may be built without ROS 2: the framework publishes the clock and
+  # the camera itself. On a server started with -ros2, null these and drop
+  # `cameras`, or both publish.
+  clock_topic: /clock
+  cameras:
+    # ../config/carla10.json's main_cam, the rig ../config/H_carla.yaml is for.
+    - logical_id: main_cam
+      topic: /carla/hero/main_cam/image
+      frame_id: main_cam
+      image_width: 1280
+      image_height: 720
+      fov: 60.0
+      fps: 10.0
+      position_x: 1.25
+      position_y: 0.0
+      position_z: 1.58
+  sources:
+    - name: visionpilot
+      kind: steer_accel
+      steering_topic: /vehicle/steering_cmd
+      acceleration_topic: /vehicle/throttle_cmd
+      # VisionPilot plans at the camera's 10 Hz; it steers positive to the
+      # right, as CARLA does (carla_control_publisher's steering_sign 1.0).
+      stale_s: 0.3

@@ -1,0 +1,16 @@
+# @package _global_
+#
+# CARLA 0.10's Town04_Opt. No Autoware map of it is published, so the Lanelet2
+# map is generated from the server's own OpenDRIVE, once, with CARLA's map tools
+# (README.md, "The Town04 map"):
+#
+#   PythonAPI/examples/av_stacks/autoware/map_tools/generate_map_artifacts.py \
+#       --town Town04_Opt --out ~/autoware_data/maps/Town04_Opt --skip-pointcloud
+#
+# Lanelet ids below (../README.md) are that map's.
+map:
+  name: Town04_Opt
+  # lanelet2_map.osm and map_projector_info.yaml; the framework writes the
+  # server's OpenDRIVE beside them on the first run.
+  directory: ${oc.env:TOWN04_MAP_DIR,${oc.env:HOME}/autoware_data/maps/Town04_Opt}
+  no_3d_model_lanelet_ids: []
