@@ -49,6 +49,13 @@ struct Config {
     bool webrtc_on = false;
     int webrtc_port;
 
+    // Dashboard `stack` endpoint: WebSocket, JSON messages of the ADAS dashboard schema 1
+    bool dashboard_on = false;
+    int dashboard_port = 8090;
+    std::string dashboard_device;   // `device` in hello and status; empty leaves it out
+    // WebRTC sends the resized camera image without the HUD (the dashboard's camera window)
+    bool stream_raw_camera = false;
+
     // Rerun logging: when enabled, per-frame data is streamed directly to an
     // .rrd recording ready to open in Rerun viewer.
     bool        rrd_on  = false;
