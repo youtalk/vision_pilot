@@ -35,7 +35,9 @@ bool read_preferred_mode(const std::string & drm_dir, int & w, int & h)
   std::vector<fs::path> connectors;
   for (const auto & e : fs::directory_iterator(drm_dir, ec)) {
     const std::string n = e.path().filename().string();
-    if (n.rfind("card", 0) == 0 && n.find("-DP-") != std::string::npos)
+    // ponytail: card0 is the card drmOpen("rcar-vcon") returns on the X5H;
+    // match the card by driver name if a board orders its cards differently.
+    if (n.rfind("card0-", 0) == 0 && n.find("-DP-") != std::string::npos)
       connectors.push_back(e.path());
   }
   std::sort(connectors.begin(), connectors.end());

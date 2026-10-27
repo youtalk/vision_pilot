@@ -62,13 +62,20 @@ int main()
   CHECK(!read_preferred_mode((root / "absent").string(), w, h));
   CHECK(w == -1 && h == -1);
 
-  // The first CONNECTED DP connector wins; a disconnected one and a
-  // writeback connector are skipped.
+  // Only card0 counts: kmssink driver-name=rcar-vcon opens the first card of
+  // that driver, and all three X5H cards are rcar-vcon. A lit monitor on
+  // another card would otherwise pass this check while kmssink drives card0.
   const fs::path a = root / "a";
   connector(a, "card0-DP-1", "disconnected", "");
   connector(a, "card0-Writeback-1", "unknown", "");
   connector(a, "card1-DP-2", "connected", "3440x1440\n1920x1080\n");
-  CHECK(read_preferred_mode(a.string(), w, h));
+  CHECK(!read_preferred_mode(a.string(), w, h));
+
+  // The connected DP connector of card0 wins; a writeback connector is skipped.
+  const fs::path g = root / "g";
+  connector(g, "card0-Writeback-1", "unknown", "");
+  connector(g, "card0-DP-1", "connected", "3440x1440\n1920x1080\n");
+  CHECK(read_preferred_mode(g.string(), w, h));
   CHECK(w == 3440 && h == 1440);
 
   // Connected, but the kernel lists no mode yet.
@@ -93,6 +100,13 @@ int main()
   const fs::path e = root / "e";
   connector(e, "card0-DP-1", "connected", "3440x1440\n", "disabled");
   CHECK(!read_preferred_mode(e.string(), w, h));
+
+  // The same unlit card0 connector, with another card lit: still no. kmssink
+  // would set a mode on card0, and the next restart would release it.
+  const fs::path f = root / "f";
+  connector(f, "card0-DP-1", "connected", "3440x1440\n", "disabled");
+  connector(f, "card1-DP-2", "connected", "1920x1080\n");
+  CHECK(!read_preferred_mode(f.string(), w, h));
 
   fs::remove_all(root);
   if (failures == 0) std::printf("TEST_PASS test_kms_layout\n");
