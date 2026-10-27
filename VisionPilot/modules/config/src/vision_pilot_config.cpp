@@ -144,6 +144,8 @@ Config load_vision_pilot_config()
     cfg.dashboard_on = parse_bool(optional(kv, "dashboard_on", "false"), "dashboard_on");
     cfg.dashboard_port = parse_int(optional(kv, "dashboard_port", "8090"), "dashboard_port");
     cfg.dashboard_device = optional(kv, "dashboard_device", "");
+    cfg.dashboard_rear_axle_m =
+        parse_double(optional(kv, "dashboard_rear_axle_m", "0.0"), "dashboard_rear_axle_m");
 
     cfg.rrd_on  = parse_bool(optional(kv, "rrd_on", "false"), "rrd_on");
     cfg.rrd_log = optional(kv, "rrd_log", "visionpilot.rrd");

@@ -50,6 +50,7 @@ struct Config {
     bool dashboard_on = false;
     int dashboard_port = 8090;
     std::string dashboard_device;   // `device` in hello and status; empty leaves it out
+    double dashboard_rear_axle_m = 0.0;  // meters from the rear axle (ego origin) to the H origin
 
     // Rerun logging: when enabled, per-frame data is streamed directly to an
     // .rrd recording ready to open in Rerun viewer.
