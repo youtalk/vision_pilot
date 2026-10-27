@@ -168,6 +168,9 @@ int main(int argc, char** argv)
 
         score->frame_begin();
         bool produced = false;
+        // The HUD is drawn when visualization_on asks for it, or while the KMS
+        // sink shows it. An inert sink costs no frame time.
+        const bool compose = cfg.visualization_on || visualization.wants_frames();
 
         preprocessor.preprocess(frame, warped, resized, net_size);
         cv::Size frame_size = frame.size();
@@ -244,7 +247,7 @@ int main(int argc, char** argv)
             }
             cv::Mat viz;  // output visualization image (empty when viz is off)
             // The raw camera flag streams `resized` as it is: no HUD and no overlay.
-            if (cfg.visualization_on && !cfg.stream_raw_camera)
+            if (compose && !cfg.stream_raw_camera)
             {
                 if (debug_viz)
                 {
@@ -266,7 +269,7 @@ int main(int argc, char** argv)
             if (cfg.rrd_on)
                 logging::Rerun::log_frame(r->frame_id, frame, warped, resized, *r, plan, ego_v, viz);
         }
-        if (cfg.visualization_on)
+        if (compose)
         {
             visualization.render_frame(display_frame);
         }

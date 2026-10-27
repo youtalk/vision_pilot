@@ -18,3 +18,10 @@ target_include_directories(test_kms_layout
         PRIVATE
             ${CMAKE_SOURCE_DIR}/modules/visualization/include
 )
+
+# The KMS sink's one-attempt gate, and KmsDisplay up to the connector read.
+if (KMSGST_FOUND)
+    find_package(GTest REQUIRED)
+    add_executable(test_kms_gate test_kms_gate.cpp)
+    target_link_libraries(test_kms_gate PRIVATE visualization GTest::gtest GTest::gtest_main)
+endif ()

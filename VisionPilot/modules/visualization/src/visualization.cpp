@@ -673,4 +673,9 @@ bool Visualization::render_frame(const cv::Mat & display_frame)
   return visual_interface->render_frame(display_frame);
 }
 
+bool Visualization::wants_frames() const
+{
+  return visual_interface->wants_frames();
+}
+
 }  // namespace visualization

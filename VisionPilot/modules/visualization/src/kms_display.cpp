@@ -25,10 +25,8 @@ bool KmsDisplay::start(int frame_w, int frame_h)
 {
   int mode_w = 0, mode_h = 0;
   if (!read_preferred_mode(drm_dir_, mode_w, mode_h)) {
-    if (!warned_)
-      std::cerr << "[KmsDisplay] no connected DisplayPort monitor under " << drm_dir_
-                << "; retrying\n";
-    warned_ = true;
+    std::cerr << "[KmsDisplay] no connected DisplayPort monitor under " << drm_dir_
+              << "; the HUD stays off until VisionPilot restarts\n";
     return false;
   }
   const KmsRect r = fit_centered(mode_w, mode_h, frame_w, frame_h);
@@ -51,20 +49,16 @@ bool KmsDisplay::start(int frame_w, int frame_h)
   if (err != nullptr) {
     std::cerr << "[KmsDisplay] pipeline rejected: " << err->message << "\n";
     g_error_free(err);
-    teardown();
     return false;
   }
   appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
   if (
     appsrc_ == nullptr ||
     gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-    std::cerr << "[KmsDisplay] kmssink did not start (driver " << driver_ << "); retrying\n";
-    teardown();
+    std::cerr << "[KmsDisplay] kmssink did not start (driver " << driver_
+              << "); the HUD stays off until VisionPilot restarts\n";
     return false;
   }
-  width_ = frame_w;
-  height_ = frame_h;
-  warned_ = false;
   std::cout << "[KmsDisplay] " << frame_w << "x" << frame_h << " shown at " << r.w << "x" << r.h
             << "+" << r.x << "+" << r.y << " on a " << mode_w << "x" << mode_h << " mode\n";
   return true;
@@ -80,7 +74,7 @@ bool KmsDisplay::pipeline_failed()
   gchar * dbg = nullptr;
   gst_message_parse_error(msg, &err, &dbg);
   std::cerr << "[KmsDisplay] pipeline error: " << (err ? err->message : "unknown")
-            << "; retrying\n";
+            << "; the HUD stays off until VisionPilot restarts\n";
   if (err) g_error_free(err);
   g_free(dbg);
   gst_message_unref(msg);
@@ -89,17 +83,20 @@ bool KmsDisplay::pipeline_failed()
 
 bool KmsDisplay::render_frame(const cv::Mat & display_frame)
 {
-  if (display_frame.empty() || display_frame.type() != CV_8UC3) return true;
-  if (
-    pipeline_ != nullptr &&
-    (display_frame.cols != width_ || display_frame.rows != height_ || pipeline_failed())) {
-    teardown();
-  }
-  if (pipeline_ == nullptr) {
-    const auto now = std::chrono::steady_clock::now();
-    if (now < next_try_) return true;
-    next_try_ = now + kRetry;
-    if (!start(display_frame.cols, display_frame.rows)) return true;
+  const bool empty = display_frame.empty() || display_frame.type() != CV_8UC3;
+  switch (gate_.on_frame(empty, display_frame.cols, display_frame.rows)) {
+    case KmsAction::Skip:
+      return true;
+    case KmsAction::Start:
+      gate_.start_result(start(display_frame.cols, display_frame.rows));
+      if (!gate_.wants_frames()) return true;
+      break;
+    case KmsAction::Push:
+      if (pipeline_failed()) {
+        gate_.pipeline_error();
+        return true;
+      }
+      break;
   }
   const cv::Mat frame = display_frame.isContinuous() ? display_frame : display_frame.clone();
   const gsize bytes = frame.total() * frame.elemSize();

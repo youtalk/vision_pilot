@@ -51,9 +51,9 @@ if (ENABLE_OCCUPANCY)
 endif ()
 
 # KmsDisplay: the HUD on a DRM/KMS output (kms_display in vision_pilot.conf).
-# kms_layout is pure and always built. The sink itself needs only core
+# kms_layout and kms_gate are pure and always built. The sink itself needs only core
 # GStreamer and its app library, not the WebRTC set above.
-target_sources(visualization PRIVATE src/kms_layout.cpp)
+target_sources(visualization PRIVATE src/kms_layout.cpp src/kms_gate.cpp)
 pkg_check_modules(KMSGST IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0)
 if (KMSGST_FOUND)
     target_sources(visualization PRIVATE src/kms_display.cpp)
