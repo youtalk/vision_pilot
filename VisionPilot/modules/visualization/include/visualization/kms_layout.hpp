@@ -14,8 +14,11 @@ struct KmsRect
   int h = 0;
 };
 
-// The largest rectangle with the frame's aspect ratio that fits the screen,
-// centred. Width and height are rounded down to even. Any non-positive input
+// The frame at the largest whole-number scale that fits the screen, centred.
+// A frame larger than the screen is scaled down to the largest rectangle with
+// its aspect ratio instead. Whole numbers only, because the CPU scaler's cost
+// grows with the output pixels and the HUD shares the CPU with a timed frame
+// loop. Width and height are rounded down to even. Any non-positive input
 // gives an empty rectangle.
 KmsRect fit_centered(int screen_w, int screen_h, int frame_w, int frame_h);
 

@@ -12,11 +12,16 @@ namespace visualization
 KmsRect fit_centered(int screen_w, int screen_h, int frame_w, int frame_h)
 {
   if (screen_w <= 0 || screen_h <= 0 || frame_w <= 0 || frame_h <= 0) return {};
-  long long w = screen_w;
-  long long h = w * frame_h / frame_w;
-  if (h > screen_h) {
-    h = screen_h;
-    w = h * frame_w / frame_h;
+  const long long k = std::min(screen_w / frame_w, screen_h / frame_h);
+  long long w = k * frame_w;
+  long long h = k * frame_h;
+  if (k == 0) {
+    w = screen_w;
+    h = w * frame_h / frame_w;
+    if (h > screen_h) {
+      h = screen_h;
+      w = h * frame_w / frame_h;
+    }
   }
   const int ew = static_cast<int>(w) & ~1;
   const int eh = static_cast<int>(h) & ~1;

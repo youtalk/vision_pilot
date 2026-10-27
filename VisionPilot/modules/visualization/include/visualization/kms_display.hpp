@@ -14,8 +14,9 @@ namespace visualization
 
 // Sink that shows every composed display frame on a DisplayPort monitor
 // through the kernel's DRM driver: appsrc ! videoconvert ! videoscale !
-// kmssink. The HUD is scaled to fit the connector's preferred mode and drawn
-// on a plane over whatever the CRTC already shows (the frame buffer console).
+// kmssink. The HUD is scaled by a whole number to fit the connector's
+// preferred mode (fit_centered) and drawn on a plane over whatever the CRTC
+// already shows (the frame buffer console).
 //
 // It never switches the display mode. On the X5H BSP kernel, releasing a mode
 // that kmssink set panics the board through a NULL callback in vsp1 at the

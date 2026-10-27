@@ -38,12 +38,14 @@ static void connector(
 
 int main()
 {
-  // Height-limited: a 2:1 HUD on the LG's 3440x1440 native mode.
-  CHECK(same(fit_centered(3440, 1440, 1024, 512), 280, 0, 2880, 1440));
+  // A whole-number scale only: the 1024x512 HUD at 2x on the LG's 3440x1440
+  // native mode, not the 2.8x that would fill its height. The scaler then
+  // writes half the pixels, and that time is the HUD's frame cost.
+  CHECK(same(fit_centered(3440, 1440, 1024, 512), 696, 208, 2048, 1024));
   // Exact fit.
   CHECK(same(fit_centered(1920, 1080, 1920, 1080), 0, 0, 1920, 1080));
-  // 4:3 into 16:9 is pillar-boxed.
-  CHECK(same(fit_centered(1920, 1080, 1024, 768), 240, 0, 1440, 1080));
+  // 1.4x would fit, so 1x it is, centred.
+  CHECK(same(fit_centered(1920, 1080, 1024, 768), 448, 156, 1024, 768));
   // Width-limited: letter-boxed.
   CHECK(same(fit_centered(1024, 1024, 2048, 1024), 0, 256, 1024, 512));
   // Odd sizes round down to even.
