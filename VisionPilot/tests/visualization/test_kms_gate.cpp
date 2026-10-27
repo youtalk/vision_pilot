@@ -1,6 +1,8 @@
 // The KMS sink decides once whether to show the HUD, and never restarts its
-// pipeline. KmsGate holds that decision. The KmsDisplay cases stop before
-// GStreamer, because the connector read fails first.
+// pipeline. KmsGate holds that decision. KmsDisplay makes it at construction,
+// before the frame loop, because the pipeline start takes about 0.5 s on the
+// X5H and the S-CORE hook can already time the first frame. The KmsDisplay
+// cases stop before GStreamer, because the connector read fails first.
 #include <gtest/gtest.h>
 #include <visualization/kms_display.hpp>
 #include <visualization/kms_gate.hpp>
@@ -67,10 +69,10 @@ TEST(KmsGate, SizeChangeMakesInert)
   EXPECT_FALSE(g.wants_frames());
 }
 
-TEST(KmsDisplay, NoDrmDirMakesInert)
+TEST(KmsDisplay, NoDrmDirMakesInertAtConstruction)
 {
-  KmsDisplay d("rcar-vcon", "/nonexistent");
-  EXPECT_TRUE(d.wants_frames());
+  KmsDisplay d("rcar-vcon", 1024, 512, "/nonexistent");
+  EXPECT_FALSE(d.wants_frames());
   EXPECT_TRUE(d.render_frame(cv::Mat(512, 1024, CV_8UC3)));
   EXPECT_FALSE(d.wants_frames());
 }
@@ -84,8 +86,7 @@ TEST(KmsDisplay, NoStartWhenConnectorDisabled)
   std::ofstream(c / "enabled") << "disabled\n";
   std::ofstream(c / "modes") << "3440x1440\n";
 
-  KmsDisplay d("rcar-vcon", drm.string());
-  EXPECT_TRUE(d.render_frame(cv::Mat(512, 1024, CV_8UC3)));
+  KmsDisplay d("rcar-vcon", 1024, 512, drm.string());
   EXPECT_FALSE(d.wants_frames());
   // The console lights the connector later: the sink does not try again.
   std::ofstream(c / "enabled") << "enabled\n";

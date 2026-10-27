@@ -87,6 +87,10 @@ struct Config
     // DisplayPort monitor if one is connected at start, with or without
     // visualization_on. Takes precedence over webrtc_on.
     std::string kms_display;
+    // The size of the frames render_frame() gets. KmsDisplay opens its
+    // pipeline for it before the frame loop.
+    int frame_w = 0;
+    int frame_h = 0;
 };
 
 void init_production_assets(const std::string& icons_dir = "");

@@ -11,9 +11,11 @@
 namespace visualization
 {
 
-KmsDisplay::KmsDisplay(std::string driver, std::string drm_dir)
+KmsDisplay::KmsDisplay(std::string driver, int frame_w, int frame_h, std::string drm_dir)
 : driver_(std::move(driver)), drm_dir_(std::move(drm_dir))
 {
+  if (gate_.on_frame(false, frame_w, frame_h) == KmsAction::Start)
+    gate_.start_result(start(frame_w, frame_h));
 }
 
 KmsDisplay::~KmsDisplay()
@@ -83,20 +85,12 @@ bool KmsDisplay::pipeline_failed()
 
 bool KmsDisplay::render_frame(const cv::Mat & display_frame)
 {
+  // The constructor used the one Start, so a frame only ever pushes or skips.
   const bool empty = display_frame.empty() || display_frame.type() != CV_8UC3;
-  switch (gate_.on_frame(empty, display_frame.cols, display_frame.rows)) {
-    case KmsAction::Skip:
-      return true;
-    case KmsAction::Start:
-      gate_.start_result(start(display_frame.cols, display_frame.rows));
-      if (!gate_.wants_frames()) return true;
-      break;
-    case KmsAction::Push:
-      if (pipeline_failed()) {
-        gate_.pipeline_error();
-        return true;
-      }
-      break;
+  if (gate_.on_frame(empty, display_frame.cols, display_frame.rows) != KmsAction::Push) return true;
+  if (pipeline_failed()) {
+    gate_.pipeline_error();
+    return true;
   }
   const cv::Mat frame = display_frame.isContinuous() ? display_frame : display_frame.clone();
   const gsize bytes = frame.total() * frame.elemSize();

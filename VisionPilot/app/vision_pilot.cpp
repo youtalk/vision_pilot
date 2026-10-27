@@ -132,7 +132,9 @@ int main(int argc, char** argv)
     }
 
     // ── Initialize display ────────────────────────────────────────────────────
-    visualization::Visualization visualization({cfg.webrtc_on, cfg.webrtc_port, show_window, cfg.kms_display});
+    // The display frame is the network input (resized), so its size is known here.
+    visualization::Visualization visualization({cfg.webrtc_on, cfg.webrtc_port, show_window, cfg.kms_display,
+                                                vm::AutoDrive::NET_W, vm::AutoDrive::NET_H});
 
     // ── Dashboard stack endpoint ──────────────────────────────────────────────
     std::unique_ptr<visualization::DashboardServer> dashboard;

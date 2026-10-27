@@ -639,7 +639,7 @@ Visualization::Visualization(Config cfg)
 {
 #if defined(ENABLE_KMS_DISPLAY)
   if (!cfg.kms_display.empty()) {
-    visual_interface = std::make_unique<KmsDisplay>(cfg.kms_display);
+    visual_interface = std::make_unique<KmsDisplay>(cfg.kms_display, cfg.frame_w, cfg.frame_h);
     return;
   }
 #else
