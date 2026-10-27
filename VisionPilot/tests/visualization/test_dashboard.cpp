@@ -107,7 +107,7 @@ void test_frame()
   vz::ObjectTracker tracker;
   vm::InferenceFrameResult r = sample_frame();
   const auto msgs = vz::dashboard::frame(
-    1000.0, r, Plan{-4.0, {0.0, 0.0}, {Warning::FCW, Warning::LLDW}}, test_H(), tracker);
+    1000.0, r, Plan{-4.0, {0.0, 0.0}, {Warning::FCW, Warning::LLDW}}, test_H(), tracker, 0.0);
   CHECK(msgs.size() == 3);
 
   const json objs = by_type(msgs, "objects")["objects"];
@@ -129,14 +129,25 @@ void test_frame()
   CHECK(alerts[1]["target"] == "trajectory");
 
   const auto more = vz::dashboard::frame(
-    1100.0, r, Plan{-6.0, {}, {Warning::AEB, Warning::RLDW}}, test_H(), tracker);
+    1100.0, r, Plan{-6.0, {}, {Warning::AEB, Warning::RLDW}}, test_H(), tracker, 0.0);
   const json a2 = by_type(more, "alerts")["alerts"];
   CHECK(a2[0]["code"] == "AEB" && a2[0]["severity"] == "critical" && a2[0]["target"] == "lead");
   CHECK(a2[1]["code"] == "RLDW" && a2[1]["severity"] == "info");
   CHECK(a2[1]["target"] == "trajectory");
 
+  // The ego frame starts at the rear axle. With the axle 1.4 m behind the H origin, every x moves
+  // 1.4 m forward. distance_m is a gap, not a position, so it stays.
+  vz::ObjectTracker axle_tracker;
+  const auto axle = vz::dashboard::frame(1000.0, r, Plan{}, test_H(), axle_tracker, 1.4);
+  const json axle_objs = by_type(axle, "objects")["objects"];
+  CHECK(std::abs(axle_objs[0]["x"].get<double>() - 53.65) < 0.01);
+  CHECK(axle_objs[0]["distance_m"] == 50.0);
+  const json axle_pts = by_type(axle, "trajectory")["pts"];
+  CHECK(axle_pts[0][0] == 2.4 && axle_pts[149][0] == 151.4);
+  CHECK(std::abs(axle_pts[99][1].get<double>() - 2.0) < 0.01);
+
   r.lateral.path_valid = false;  // a failed fit clears the ribbon on the page
-  const auto lost = vz::dashboard::frame(1200.0, r, Plan{0.0, {}, {}}, test_H(), tracker);
+  const auto lost = vz::dashboard::frame(1200.0, r, Plan{0.0, {}, {}}, test_H(), tracker, 0.0);
   CHECK(by_type(lost, "trajectory")["pts"].empty());
   CHECK(by_type(lost, "alerts")["alerts"].empty());
 }
@@ -197,7 +208,8 @@ void write_jsonl(const char * path)
   std::ofstream out(path);
   out << vz::dashboard::hello(0.0, "test") << "\n";
   for (const auto & m : vz::dashboard::frame(
-         1.0, sample_frame(), Plan{-4.0, {}, {Warning::FCW, Warning::RLDW}}, test_H(), tracker)) {
+         1.0, sample_frame(), Plan{-4.0, {}, {Warning::FCW, Warning::RLDW}}, test_H(), tracker,
+         0.0)) {
     out << m << "\n";
   }
   out << vz::dashboard::status(1.0, sample_frame(), "test", 12.0) << "\n";
@@ -215,7 +227,7 @@ int serve(uint16_t port, int seconds)
   int n = 0;
   while (std::chrono::steady_clock::now() < end) {
     const double t = vz::now_ms();
-    auto msgs = vz::dashboard::frame(t, r, Plan{0.0, {}, {}}, test_H(), tracker);
+    auto msgs = vz::dashboard::frame(t, r, Plan{0.0, {}, {}}, test_H(), tracker, 0.0);
     if (n % 100 == 0) msgs.push_back(vz::dashboard::status(t, r, "test", 12.0));
     const auto p0 = std::chrono::steady_clock::now();
     server.publish(std::move(msgs));

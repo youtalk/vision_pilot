@@ -230,7 +230,8 @@ int main(int argc, char** argv)
             {
                 const double t_ms = visualization::now_ms();
                 auto msgs = visualization::dashboard::frame(
-                    t_ms, *r, plan, pipeline.H_resized(), dashboard_tracker);
+                    t_ms, *r, plan, pipeline.H_resized(), dashboard_tracker,
+                    cfg.dashboard_rear_axle_m);
                 if (t_ms - dashboard_status_ms >= 1000.0)
                 {
                     msgs.push_back(visualization::dashboard::status(

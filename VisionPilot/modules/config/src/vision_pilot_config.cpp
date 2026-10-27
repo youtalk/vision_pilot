@@ -180,6 +180,8 @@ Config load_vision_pilot_config()
     cfg.dashboard_device = optional(kv, "dashboard_device", "");
     cfg.stream_raw_camera =
         parse_bool(optional(kv, "stream_raw_camera", "false"), "stream_raw_camera");
+    cfg.dashboard_rear_axle_m =
+        parse_double(optional(kv, "dashboard_rear_axle_m", "0.0"), "dashboard_rear_axle_m");
 
     cfg.rrd_on  = parse_bool(optional(kv, "rrd_on", "false"), "rrd_on");
     cfg.rrd_log = optional(kv, "rrd_log", "visionpilot.rrd");

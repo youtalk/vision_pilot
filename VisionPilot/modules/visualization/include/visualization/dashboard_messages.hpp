@@ -14,10 +14,11 @@ namespace visualization::dashboard
 
 std::string hello(double t_ms, const std::string & device);
 
-// objects, trajectory and alerts for one inference frame, in that order.
+// objects, trajectory and alerts for one inference frame, in that order. The dashboard's ego frame
+// starts at the rear axle, rear_axle_m behind the H origin, so every x gets rear_axle_m added.
 std::vector<std::string> frame(
   double t_ms, const visionpilot::models::InferenceFrameResult & r, const Plan & plan,
-  const cv::Mat & H_resized, ObjectTracker & tracker);
+  const cv::Mat & H_resized, ObjectTracker & tracker, double rear_axle_m);
 
 std::string status(
   double t_ms, const visionpilot::models::InferenceFrameResult & r, const std::string & device,

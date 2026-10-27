@@ -42,7 +42,8 @@ float path_y(const vf::LateralFusionEstimate & l, float x)
 }
 
 json objects(
-  double t_ms, const vm::InferenceFrameResult & r, const cv::Mat & H, ObjectTracker & tracker)
+  double t_ms, const vm::InferenceFrameResult & r, const cv::Mat & H, ObjectTracker & tracker,
+  double rear_axle_m)
 {
   std::vector<GroundBox> boxes;
   std::vector<int> levels;
@@ -79,7 +80,7 @@ json objects(
     json o = {
       {"id", ids[i]},
       {"class", g.truck ? "truck" : "car"},
-      {"x", r2(g.x_rear + length / 2)},
+      {"x", r2(g.x_rear + length / 2 + rear_axle_m)},
       {"y", r2(g.y)},
       {"yaw", 0.0},
       {"length", length},
@@ -95,13 +96,13 @@ json objects(
   return m;
 }
 
-json trajectory(double t_ms, const vf::LateralFusionEstimate & l)
+json trajectory(double t_ms, const vf::LateralFusionEstimate & l, double rear_axle_m)
 {
   // A failed fit sends no points, so the page clears the ribbon instead of keeping the last one.
   json pts = json::array();
   for (int x = 1; l.path_valid && x <= 150; ++x) {
     const double y = path_y(l, static_cast<float>(x));
-    if (std::isfinite(y)) pts.push_back({x, r2(y)});
+    if (std::isfinite(y)) pts.push_back({r2(x + rear_axle_m), r2(y)});
   }
   json m = envelope("trajectory", t_ms);
   m["frame"] = "ego";
@@ -156,11 +157,11 @@ std::string hello(double t_ms, const std::string & device)
 
 std::vector<std::string> frame(
   double t_ms, const vm::InferenceFrameResult & r, const Plan & plan, const cv::Mat & H_resized,
-  ObjectTracker & tracker)
+  ObjectTracker & tracker, double rear_axle_m)
 {
   return {
-    objects(t_ms, r, H_resized, tracker).dump(), trajectory(t_ms, r.lateral).dump(),
-    alerts(t_ms, plan).dump()};
+    objects(t_ms, r, H_resized, tracker, rear_axle_m).dump(),
+    trajectory(t_ms, r.lateral, rear_axle_m).dump(), alerts(t_ms, plan).dump()};
 }
 
 std::string status(
