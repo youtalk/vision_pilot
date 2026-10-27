@@ -15,7 +15,7 @@ pkg_check_modules(WEBCONN IMPORTED_TARGET
         gstreamer-webrtc-1.0
 )
 
-find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp)
+find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp REQUIRED)
 
 if (WEBCONN_FOUND AND Boost_FOUND AND NLOHMANN_JSON_INCLUDE_DIR)
     set(WEBRTC_DEPS_FOUND TRUE)
@@ -31,6 +31,10 @@ add_library(visualization
         src/visual_interface.cpp
         src/local_display.cpp
 #        src/debug_draw.cpp
+        src/box_projection.cpp
+        src/object_tracker.cpp
+        src/dashboard_messages.cpp
+        src/dashboard_server.cpp
         ${VIS_SOURCES}
 )
 
@@ -39,6 +43,10 @@ if(BUILD_TESTING)
             src/debug_display.cpp)
     target_compile_definitions(visualization PUBLIC BUILD_TESTING)
 endif()
+
+target_include_directories(visualization PRIVATE ${NLOHMANN_JSON_INCLUDE_DIR})
+target_include_directories(visualization PRIVATE ${Boost_INCLUDE_DIRS})
+target_link_libraries(visualization PRIVATE Boost::system)
 
 if (ENABLE_OCCUPANCY)
     target_sources(visualization PRIVATE
