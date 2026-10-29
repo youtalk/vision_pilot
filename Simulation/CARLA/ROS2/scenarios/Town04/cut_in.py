@@ -10,7 +10,7 @@ class Scenario(Town04Base):
     def setup_npcs(self):
         wp = self.get_waypoint_ahead(distance_m=25.0, lane="left")
         self.cut_in_vehicle = self.spawn_npc(
-            "vehicle.audi.a2",
+            "vehicle.kia.niro",
             wp.transform,
             autopilot=True,
             speed_pct=10.0,

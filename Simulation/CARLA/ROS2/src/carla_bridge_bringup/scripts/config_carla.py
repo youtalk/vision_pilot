@@ -139,7 +139,7 @@ def create_scenario_from_json(json_path):
         map_name = data.get("map", "Town04")
         scenario_name = data.get("scenario_name", os.path.splitext(os.path.basename(json_path))[0])
         description = data.get("description", "JSON Scenario")
-        hero_type = data.get("hero", {}).get("type") or data.get("type", "vehicle.lincoln.mkz_2020")
+        hero_type = data.get("hero", {}).get("type") or data.get("type", "vehicle.lincoln.mkz")
         hero_id = data.get("hero", {}).get("id") or data.get("id", "hero")
         hero_spawn_index = int(data.get("hero", {}).get("spawn_index", data.get("spawn_index", 0)))
 
@@ -227,6 +227,19 @@ def _setup_vehicle(world, scenario):
     bp = candidates[0]
     bp.set_attribute("role_name", scenario.hero_id)
     bp.set_attribute("ros_name", scenario.hero_id)
+
+    # A scenario (or SPAWN_WAYPOINT="road,lane,s") can name an OpenDRIVE lane
+    # position instead of a spawn index. PoV_Highway needs it on ue58-dev: the
+    # imported map has no spawn points there.
+    spawn_wp = os.environ.get("SPAWN_WAYPOINT") or getattr(scenario, "hero_spawn_waypoint", None)
+    if spawn_wp:
+        road, lane, s = spawn_wp.split(",") if isinstance(spawn_wp, str) else spawn_wp
+        wp = map_.get_waypoint_xodr(int(road), int(lane), float(s))
+        if wp is None:
+            raise ValueError(f"No waypoint at road {road} lane {lane} s {s} on map {map_.name}")
+        logging.info("Map %s: spawning hero vehicle at road %s lane %s s %s", map_.name, road, lane, s)
+        tf = wp.transform
+        return world.spawn_actor(bp, carla.Transform(tf.location + carla.Location(z=0.5), tf.rotation))
 
     spawn_points = map_.get_spawn_points()
     default_idx = int(scenario.hero_spawn_index)

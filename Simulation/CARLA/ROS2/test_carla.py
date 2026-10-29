@@ -23,7 +23,7 @@ def test_vehicle():
     client.set_timeout(10.0)
     world = client.get_world()
 
-    bp = world.get_blueprint_library().find('vehicle.lincoln.mkz_2020')
+    bp = world.get_blueprint_library().find('vehicle.lincoln.mkz')
     spawn_points = world.get_map().get_spawn_points()
     vehicle = world.try_spawn_actor(bp, spawn_points[0])
 

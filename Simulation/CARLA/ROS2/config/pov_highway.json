@@ -1,5 +1,5 @@
 {
-  "type": "vehicle.lincoln.mkz_2020",
+  "type": "vehicle.lincoln.mkz",
   "id": "hero",
   "map": "PoV_Highway",
   "spawn_index": 0,
@@ -25,7 +25,7 @@
     }
   ],
   "npc_vehicles": [
-    { "type": "vehicle.audi.a2", "spawn_index": 1, "autopilot": true }
+    { "type": "vehicle.kia.niro", "spawn_index": 1, "autopilot": true }
   ]
 }
 

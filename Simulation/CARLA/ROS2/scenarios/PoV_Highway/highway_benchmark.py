@@ -16,6 +16,7 @@ All triggers are 100% EVENT-BASED:
 import os
 import math
 import logging
+import random
 from enum import IntEnum
 import carla
 from scenarios.PoV_Highway.base import PoVHighwayBase
@@ -42,24 +43,38 @@ class Scenario(PoVHighwayBase):
     # Fast-start mode: If set to True (or SCENARIO_FAST_START=1), teleports ego to 500m
     # before Curve 1 so the entire 5-phase test runs in ~60s without a 7km commute.
     FAST_START = bool(int(os.environ.get("SCENARIO_FAST_START", "0")))
+    # How far fast-start moves the ego. Raise it to skip phases while tuning.
+    FAST_START_M = float(os.environ.get("SCENARIO_FAST_START_M", 6600.0))
 
     # Lead vehicle parameters (Phase 3)
     LEAD_SPAWN_DIST_M = float(os.environ.get("LEAD_SPAWN_DIST", 200.0))
     LEAD_SPEED_KMH = float(os.environ.get("LEAD_SPEED_KMH", 50.0))
-    LEAD_BLUEPRINT = os.environ.get("LEAD_BLUEPRINT", "vehicle.tesla.model3")
+    # Tesla Model 3 and Kia Niro do not spawn in a ue58-dev package that cooks only
+    # the demo maps, so the defaults use older models that every package carries.
+    LEAD_BLUEPRINT = os.environ.get("LEAD_BLUEPRINT", "vehicle.dodge.charger")
 
     # Standstill vehicle parameters (Phase 4)
     STANDSTILL_SPAWN_DIST_M = float(os.environ.get("STANDSTILL_SPAWN_DIST", 200.0))
-    STANDSTILL_BLUEPRINT = os.environ.get("STANDSTILL_BLUEPRINT", "vehicle.audi.a2")
+    STANDSTILL_BLUEPRINT = os.environ.get("STANDSTILL_BLUEPRINT", "vehicle.nissan.patrol")
 
     # Cut-out trigger distance between preceding car and standstill obstacle (Phase 5)
     CUTOUT_TRIGGER_DIST_M = float(os.environ.get("CUTOUT_TRIGGER_DIST", 35.0))
+
+    # Background traffic: oncoming cars on the other carriageway and
+    # same-direction cars in the lane next to the ego. The ego's own lane stays
+    # clear, so only the scenario's lead and standstill cars are ahead of it.
+    TRAFFIC = bool(int(os.environ.get("TRAFFIC", "1")))
+    TRAFFIC_SEED = int(os.environ.get("TRAFFIC_SEED", 7))
+    TRAFFIC_RANGE_M = float(os.environ.get("TRAFFIC_RANGE_M", 5000.0))
+    ONCOMING_SPACING_M = float(os.environ.get("ONCOMING_SPACING_M", 50.0))
+    SAMEDIR_SPACING_M = float(os.environ.get("SAMEDIR_SPACING_M", 80.0))
 
     def __init__(self, world, traffic_manager, hero_vehicle=None):
         super().__init__(world, traffic_manager, hero_vehicle)
         self.phase = Phase.PHASE_1_STRAIGHT_CRUISE
         self.lead_vehicle = None
         self.standstill_vehicle = None
+        self.samedir_traffic = []
         self.cutout_executed = False
         self.start_loc = None
         self.start_s = 0.0
@@ -77,7 +92,7 @@ class Scenario(PoVHighwayBase):
         # Optional fast-start: Teleport ego to 500m before the first curve (~s=6600m)
         if self.FAST_START:
             logging.info("[Scenario] SCENARIO_FAST_START active: advancing ego to 500m before Curve 1")
-            target_wps = hero_wp.next(6600.0)
+            target_wps = hero_wp.next(self.FAST_START_M)
             if target_wps:
                 target_wp = target_wps[0]
                 tf = carla.Transform(
@@ -94,6 +109,9 @@ class Scenario(PoVHighwayBase):
                 self.start_loc = self.hero_vehicle.get_location()
                 self.start_s = hero_wp.s
                 logging.info("[Scenario] Hero vehicle repositioned at s=%.1fm for quick demo", self.start_s)
+
+        if self.TRAFFIC:
+            self._spawn_traffic(hero_wp)
 
         logging.info("=" * 70)
         logging.info(" [Scenario] 5-Phase Highway Benchmark Initialized")
@@ -147,6 +165,7 @@ class Scenario(PoVHighwayBase):
                 )
                 # Scenario Event: Spawn standstill vehicle NPC 200m ahead of ego @ 0 km/h
                 self._spawn_standstill_vehicle()
+                self._open_cutout_gap()
 
         # ── Phase 4: Following through Curve 2 -> Cut-out Proximity Trigger ──
         elif self.phase == Phase.PHASE_4_STANDSTILL_APPEARS:
@@ -171,14 +190,69 @@ class Scenario(PoVHighwayBase):
                 dist_ego_to_obstacle = hero_loc.distance(self.standstill_vehicle.get_location())
                 ego_speed_kmh = self._get_speed_kmh(self.hero_vehicle)
 
-                # Event: Ego detected obstacle and came to a safe stop
+                # Event: Ego detected obstacle and came to a safe stop.
+                # Judge on the bumper gap: the centre distance of two touching
+                # cars is about one car length, which read as a pass before.
+                gap_m = dist_ego_to_obstacle - (self.hero_vehicle.bounding_box.extent.x
+                                                 + self.standstill_vehicle.bounding_box.extent.x)
                 if ego_speed_kmh < 1.0 and dist_ego_to_obstacle < 35.0:
+                    verdict = "BENCHMARK PASS!" if gap_m > 0.3 else "BENCHMARK FAIL: contact"
                     self._transition_to(
                         Phase.PHASE_COMPLETED,
-                        f"Ego brought vehicle to a complete safe stop {dist_ego_to_obstacle:.1f}m behind obstacle. BENCHMARK PASS!"
+                        f"Ego stopped with a {gap_m:.1f}m bumper gap to the obstacle. {verdict}"
                     )
 
     # ── Event Action Helpers ───────────────────────────────────────────────────
+
+    def _spawn_traffic(self, hero_wp):
+        """Fill the other carriageway and the ego's next lane with Traffic Manager cars."""
+        random.seed(self.TRAFFIC_SEED)
+        ego_loc = hero_wp.transform.location
+        fwd = hero_wp.transform.get_forward_vector()
+        blueprints = [
+            bp.id for bp in self.world.get_blueprint_library().filter("vehicle.*")
+            if int(bp.get_attribute("number_of_wheels")) == 4 and "miningtruck" not in bp.id
+        ]
+
+        def ahead_m(wp):
+            d = wp.transform.location - ego_loc
+            return d.x * fwd.x + d.y * fwd.y
+
+        spawned = {True: 0, False: 0}
+        groups = ((self.ONCOMING_SPACING_M, False, (90.0, 120.0)),
+                  (self.SAMEDIR_SPACING_M, True, (80.0, 110.0)))
+        for spacing, same_road, kmh in groups:
+            for wp in self.world.get_map().generate_waypoints(spacing):
+                if (wp.road_id == hero_wp.road_id) != same_road:
+                    continue
+                if same_road and wp.lane_id == hero_wp.lane_id:
+                    continue
+                if not -200.0 < ahead_m(wp) < self.TRAFFIC_RANGE_M or random.random() < 0.3:
+                    continue
+                actor = self.spawn_npc(random.choice(blueprints), wp.transform, autopilot=True, keep_lane=True)
+                if actor:
+                    self.traffic_manager.set_desired_speed(actor, random.uniform(*kmh))
+                    spawned[same_road] += 1
+                    if same_road:
+                        self.samedir_traffic.append(actor)
+        logging.info("[Scenario] Background traffic: %d oncoming, %d same direction",
+                     spawned[False], spawned[True])
+
+    def _open_cutout_gap(self):
+        """Hold back next-lane cars behind the lead car and send the ones beside it
+        ahead, so the lane is free when the lead car cuts out a few seconds later."""
+        if not self.lead_vehicle or not self.lead_vehicle.is_alive:
+            return
+        map_ = self.world.get_map()
+        lead_s = map_.get_waypoint(self.lead_vehicle.get_location()).s
+        for actor in self.samedir_traffic:
+            if not actor.is_alive:
+                continue
+            ds = map_.get_waypoint(actor.get_location()).s - lead_s
+            if -250.0 < ds < 20.0:
+                self.traffic_manager.set_desired_speed(actor, max(self.LEAD_SPEED_KMH - 15.0, 20.0))
+            elif 20.0 <= ds < 250.0:
+                self.traffic_manager.set_desired_speed(actor, 130.0)
 
     def _spawn_lead_vehicle(self):
         """Spawn preceding vehicle 200m ahead in lane @ 50 km/h."""
@@ -192,13 +266,8 @@ class Scenario(PoVHighwayBase):
                 keep_lane=True,
             )
             if self.lead_vehicle:
-                # Regulate speed to 50 km/h (13.89 m/s)
-                target_speed_mps = self.LEAD_SPEED_KMH / 3.6
-                if hasattr(self.traffic_manager, "set_desired_speed"):
-                    self.traffic_manager.set_desired_speed(self.lead_vehicle, target_speed_mps)
-                else:
-                    # In 100 km/h zone, 50% speed limit difference yields 50 km/h
-                    self.traffic_manager.vehicle_percentage_speed_difference(self.lead_vehicle, 50.0)
+                # Traffic Manager takes km/h here, not m/s.
+                self.traffic_manager.set_desired_speed(self.lead_vehicle, self.LEAD_SPEED_KMH)
 
                 logging.info(
                     "[Scenario] SPAWNED Preceding Vehicle (%s) 200m ahead @ %0.1f km/h",
@@ -215,6 +284,8 @@ class Scenario(PoVHighwayBase):
                 self.STANDSTILL_BLUEPRINT,
                 wp.transform,
             )
+            if not self.standstill_vehicle:
+                logging.error("[Scenario] Failed to spawn standstill vehicle %s", self.STANDSTILL_BLUEPRINT)
             if self.standstill_vehicle:
                 # Lock brakes completely so it behaves as an unyielding stationary hazard
                 self.standstill_vehicle.apply_control(
@@ -244,15 +315,19 @@ class Scenario(PoVHighwayBase):
                 project_to_road=True,
                 lane_type=carla.LaneType.Driving,
             )
-            to_right = True
-            if lead_wp.get_left_lane() and lead_wp.get_left_lane().lane_type == carla.LaneType.Driving:
-                to_right = False  # Change to left lane
-            elif lead_wp.get_right_lane() and lead_wp.get_right_lane().lane_type == carla.LaneType.Driving:
-                to_right = True   # Change to right lane
+            target, direction_str = lead_wp.get_left_lane(), "LEFT"
+            if not target or target.lane_type != carla.LaneType.Driving:
+                target, direction_str = lead_wp.get_right_lane(), "RIGHT"
+            if not target or target.lane_type != carla.LaneType.Driving:
+                logging.error("[Scenario] No lane next to the lead vehicle for the cut-out")
+                return
 
-            direction_str = "RIGHT" if to_right else "LEFT"
+            # Steer through the next lane with an explicit path. On ue58-dev the
+            # Traffic Manager drops force_lane_change for this car (it works on a
+            # freshly spawned one), so the cut-out never happened.
+            path = [target.next(d)[0].transform.location for d in range(12, 312, 10)]
             logging.info("[Scenario] EXECUTING SUDDEN CUT-OUT to %s lane!", direction_str)
-            self.traffic_manager.force_lane_change(self.lead_vehicle, to_right)
+            self.traffic_manager.set_path(self.lead_vehicle, path)
 
         except Exception as e:
             logging.error("[Scenario] Failed to execute cut-out maneuver: %s", e)

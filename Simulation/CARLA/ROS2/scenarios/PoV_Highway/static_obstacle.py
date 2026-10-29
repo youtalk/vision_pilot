@@ -11,7 +11,7 @@ class Scenario(PoVHighwayBase):
     def setup_npcs(self):
         # Place stationary hazard 50m directly ahead in the same lane
         wp = self.get_waypoint_ahead(distance_m=50.0, lane="same")
-        stalled = self.spawn_npc("vehicle.audi.a2", wp.transform, autopilot=False)
+        stalled = self.spawn_npc("vehicle.kia.niro", wp.transform, autopilot=False)
         if stalled:
             try:
                 # Turn on hazard / warning lights

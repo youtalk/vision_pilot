@@ -11,7 +11,7 @@ class Scenario(PoVHighwayBase):
         # Place cut-in vehicle 25 meters ahead in the left lane
         wp = self.get_waypoint_ahead(distance_m=25.0, lane="left")
         self.cut_in_vehicle = self.spawn_npc(
-            "vehicle.audi.a2",
+            "vehicle.kia.niro",
             wp.transform,
             autopilot=True,
             speed_pct=10.0,

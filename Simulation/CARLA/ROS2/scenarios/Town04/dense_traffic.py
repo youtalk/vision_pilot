@@ -12,7 +12,7 @@ class Scenario(Town04Base):
         spawn_points = self.world.get_map().get_spawn_points()
         # Highway NPCs at fixed points
         if len(spawn_points) > 152:
-            self.spawn_npc("vehicle.audi.a2", spawn_points[151], autopilot=True)
+            self.spawn_npc("vehicle.kia.niro", spawn_points[151], autopilot=True)
             self.spawn_npc("vehicle.tesla.model3", spawn_points[152], autopilot=True)
 
         # Ambient random vehicles

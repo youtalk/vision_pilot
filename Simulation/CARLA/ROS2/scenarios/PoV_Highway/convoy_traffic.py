@@ -14,11 +14,11 @@ class Scenario(PoVHighwayBase):
 
         # Lead vehicle 2: 75m ahead in same lane
         wp2 = self.get_waypoint_ahead(distance_m=75.0, lane="same")
-        self.spawn_npc("vehicle.audi.a2", wp2.transform, autopilot=True, speed_pct=25.0, keep_lane=True)
+        self.spawn_npc("vehicle.kia.niro", wp2.transform, autopilot=True, speed_pct=25.0, keep_lane=True)
 
         # Adjacent traffic: 20m ahead in left lane
         wp3 = self.get_waypoint_ahead(distance_m=20.0, lane="left")
-        self.spawn_npc("vehicle.toyota.prius", wp3.transform, autopilot=True, speed_pct=15.0, keep_lane=True)
+        self.spawn_npc("vehicle.mini.cooper", wp3.transform, autopilot=True, speed_pct=15.0, keep_lane=True)
 
         logging.info("Spawned 3 convoy/adjacent vehicles")
 

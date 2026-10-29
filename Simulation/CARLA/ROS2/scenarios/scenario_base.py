@@ -19,7 +19,7 @@ class CarlaScenario:
     map_name = "Town04"
     scenario_name = "base"
     description = ""
-    hero_type = "vehicle.lincoln.mkz_2020"
+    hero_type = "vehicle.lincoln.mkz"
     hero_id = "hero"
     hero_spawn_index = 0
     weather = carla.WeatherParameters.ClearNoon
