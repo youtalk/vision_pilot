@@ -58,11 +58,15 @@ EOF
   docker restart pov-vp >/dev/null
   (cd "$ROS2" && SCENARIO_FAST_START=1 exec "$PY" -I src/carla_bridge_bringup/scripts/config_carla.py \
     --map PoV_Highway --scenario highway_benchmark > "$logs/scenario-$tag.log" 2>&1) &
+  # The scenario never exits by itself. Stop it when the run ends: the
+  # observer ends with the hero, or the user presses Ctrl-C.
+  trap "kill $! 2>/dev/null" EXIT   # $! expands now: the scenario PID
   # ponytail: both waits have no timeout; read the scenario log if one hangs.
   until grep -q -E "Running\.\.\.|Traceback" "$logs/scenario-$tag.log" 2>/dev/null; do sleep 1; done
   docker start pov-bridge >/dev/null
-  until docker logs --since 1m pov-bridge 2>&1 | grep -q "hero_actor found"; do sleep 1; done
-  exec "$PY" -I "$ROS2/loop/observer.py" > "$logs/observer-$tag.log" 2>&1
+  # Not grep -q: under pipefail, an early grep exit makes docker die of SIGPIPE.
+  until docker logs --since 1m pov-bridge 2>&1 | grep "hero_actor found" >/dev/null; do sleep 1; done
+  "$PY" -I "$ROS2/loop/observer.py" > "$logs/observer-$tag.log" 2>&1
 }
 
 case ${1:-} in

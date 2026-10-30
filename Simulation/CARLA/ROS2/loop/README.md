@@ -21,6 +21,8 @@ VisionPilot shows its HUD in a window. If the window does not open, run `xhost +
 bash loop_run.sh run cut35
 ```
 
+Two things end a run: the scenario destroys the hero, or you press Ctrl-C. The script then stops the scenario, so the next run starts with one client only. `bash test_loop_run.sh` checks this without CARLA.
+
 The logs go to `LOG_DIR` (default `./loop-logs`): `scenario-<tag>.log` and `observer-<tag>.log`. Other variables, for example `CUTOUT_TRIGGER_DIST` and `SCENARIO_FAST_START_M`, go to the scenario.
 
 ## Run order
